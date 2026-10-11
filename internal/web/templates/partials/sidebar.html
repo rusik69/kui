@@ -1,0 +1,37 @@
+{{define "sidebar"}}
+<div class="sidebar">
+  <div class="sidebar-header">kui</div>
+  <div class="sidebar-section">Cluster</div>
+  <div class="sidebar-link {{if eq .Resource "overview"}}active{{end}}" data-resource="overview" data-label="Overview"
+       hx-get="/c/{{.Context}}/{{.Namespace}}/overview" hx-target="#content" hx-swap="innerHTML"
+       hx-push-url="/c/{{.Context}}/{{.Namespace}}/overview" onclick="kui.selectSidebarLink(this)">
+    <svg class="icon"><use href="#icon-overview"/></svg>Overview
+  </div>
+  <div class="sidebar-link" hx-post="/c/{{.Context}}/{{.Namespace}}/debug-shell" hx-target="#detail-pane" hx-swap="innerHTML">
+    <svg class="icon"><use href="#icon-terminal"/></svg>Terminal &amp; SSH
+  </div>
+
+  {{range $group := .Groups}}
+  <div class="sidebar-section"><svg class="icon"><use href="#{{groupIcon $group}}"/></svg>{{$group}}</div>
+  {{range index $.GroupKinds $group}}
+  <div class="sidebar-link {{if eq .Name $.Resource}}active{{end}}" data-count-for="{{.Name}}" data-resource="{{.Name}}" data-label="{{.Kind}}"
+       hx-get="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}"
+       hx-target="#content" hx-swap="innerHTML"
+       hx-push-url="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" onclick="kui.selectSidebarLink(this)">
+    <span>{{.Kind}}</span>
+    <span class="sidebar-count-wrap">
+      <span class="sidebar-count"></span>
+      <span class="sidebar-count-dot dot dot-red" style="display:none"></span>
+    </span>
+  </div>
+  {{end}}
+  {{end}}
+
+  <div class="sidebar-section">Discovery</div>
+  <div class="sidebar-link {{if eq .Resource "all"}}active{{end}}" data-resource="all" data-label="All resources"
+       hx-get="/c/{{.Context}}/{{.Namespace}}/all" hx-target="#content" hx-swap="innerHTML"
+       hx-push-url="/c/{{.Context}}/{{.Namespace}}/all" onclick="kui.selectSidebarLink(this)">
+    <svg class="icon"><use href="#icon-all"/></svg>All resources
+  </div>
+</div>
+{{end}}

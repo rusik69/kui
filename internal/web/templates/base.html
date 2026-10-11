@@ -1,0 +1,92 @@
+{{define "page"}}
+<!doctype html>
+<html>
+<head>
+<script>document.documentElement.setAttribute('data-theme', localStorage.getItem('kui.theme') || 'dark')</script>
+<meta charset="utf-8">
+<title>kui &middot; {{.ContextName}}</title>
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/vendor/htmx.min.js"></script>
+<script src="/static/vendor/htmx-sse.js"></script>
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/xterm-addon-fit.js"></script>
+</head>
+<body data-ctx="{{.Context}}">
+{{template "icons"}}
+<div id="counts-poller" hx-get="/c/{{.Context}}/counts?ns={{.Namespace}}" hx-trigger="load, every 20s"
+     hx-target="this" hx-swap="innerHTML" style="display:none"></div>
+<div class="app">
+  {{template "sidebar" .}}
+  <div class="main">
+    <div class="topbar">
+      <select onchange="location.href='/c/'+this.value">
+        {{range .Contexts}}<option value="{{.ID}}" {{if .Current}}selected{{end}}>{{.Name}}</option>{{end}}
+      </select>
+      <select onchange="kui.changeNamespace(this.value)">
+        <option value="_all" {{if eq .Namespace "_all"}}selected{{end}}>All namespaces</option>
+        {{range .Namespaces}}<option value="{{.}}" {{if eq . $.Namespace}}selected{{end}}>{{.}}</option>{{end}}
+      </select>
+      <div class="search-trigger" onclick="kui.openPalette()">
+        <svg class="icon"><use href="#icon-search"/></svg>
+        <span>Search objects, commands and hosts</span>
+        <span class="kbd-hint">&#8984;K</span>
+      </div>
+      <input type="text" placeholder="Filter&hellip;" id="row-filter" onkeyup="kui.filterRows(this.value)">
+      <button type="button" class="icon-btn" title="Toggle theme" onclick="kui.toggleTheme()">
+        <svg class="icon" id="theme-icon"><use href="#icon-moon"/></svg>
+      </button>
+    </div>
+    <nav class="breadcrumb">
+      <span>{{.ContextName}}</span>
+      <svg class="icon"><use href="#icon-chevron"/></svg>
+      <span>{{if eq .Namespace "_all"}}all namespaces{{else}}{{.Namespace}}{{end}}</span>
+      <svg class="icon"><use href="#icon-chevron"/></svg>
+      <span class="breadcrumb-resource" id="breadcrumb-resource" onclick="kui.closeDetail()">{{title .Resource}}</span><span id="breadcrumb-name"></span>
+    </nav>
+    <div class="content" id="content">
+      {{template "content" .}}
+    </div>
+  </div>
+</div>
+<div class="palette-overlay" id="palette-overlay" style="display:none" onclick="if(event.target===this) kui.closePalette()">
+  <div class="palette">
+    <input type="hidden" name="ns" value="{{.Namespace}}">
+    <input type="text" id="palette-input" name="q" placeholder="Search objects, commands and hosts" autocomplete="off"
+           hx-get="/c/{{.Context}}/search" hx-trigger="input changed delay:300ms, keyup[key=='Enter']"
+           hx-include="[name='ns']" hx-target="#palette-results" hx-swap="innerHTML">
+    <div id="palette-results"></div>
+  </div>
+</div>
+<div class="statusbar" id="statusbar"
+     hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML">
+  Live
+</div>
+<div id="toast-container" class="toast-container"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
+{{end}}
+
+{{define "content"}}
+{{if .ConnError}}
+<div class="conn-error">
+  Can't reach <strong>{{.ContextName}}</strong>: {{.ConnError}}
+  &mdash; switch context above, or fix the credentials and reload.
+</div>
+{{end}}
+<div class="bulk-bar" id="bulk-bar" style="display:none">
+  <span id="bulk-count"></span>
+  <button class="btn btn-danger" onclick="kui.bulkDelete()">Delete selected</button>
+  <button class="btn" onclick="kui.clearSelection()">Clear</button>
+</div>
+<div class="content-row">
+  <div class="list-pane" id="list-pane"
+       hx-ext="sse" sse-connect="{{.WatchURL}}"
+       hx-get="{{.ListURL}}" hx-trigger="load, sse:message" hx-swap="innerHTML"
+       data-bulk-delete-url="{{.BulkDeleteURL}}">
+  </div>
+  <div class="detail-splitter" id="detail-splitter" style="display:none"></div>
+  <div class="detail-pane" id="detail-pane"></div>
+</div>
+{{end}}

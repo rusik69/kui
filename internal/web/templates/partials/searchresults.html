@@ -1,0 +1,25 @@
+{{define "searchresults"}}
+{{if .Commands}}
+<div class="section-title">Commands</div>
+{{range $i, $cmd := .Commands}}
+{{if $cmd.FullNav}}
+<div class="palette-result {{if eq $i 0}}active{{end}}" onclick="location.href='{{$cmd.URL}}'">{{$cmd.Label}}</div>
+{{else}}
+<div class="palette-result {{if eq $i 0}}active{{end}}" hx-get="{{$cmd.URL}}" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="{{$cmd.URL}}" onclick="kui.closePalette()">{{$cmd.Label}}</div>
+{{end}}
+{{end}}
+{{end}}
+
+{{if .Objects}}
+<div class="section-title">Objects</div>
+{{range .Objects}}
+<div class="palette-result" hx-get="{{.ListURL}}" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="{{.ListURL}}" onclick="kui.closePalette()">
+  {{.Kind}}/{{.Name}}{{if .Namespace}} <span class="text-dim">{{.Namespace}}</span>{{end}}
+</div>
+{{end}}
+{{end}}
+
+{{if and (not .Commands) (not .Objects)}}<div class="empty-state">No results</div>{{end}}
+{{end}}

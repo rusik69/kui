@@ -1,0 +1,12 @@
+{{define "history"}}
+<table class="resource-table">
+  <thead><tr><th>Revision</th><th>ReplicaSet</th><th>Image</th><th>Replicas</th><th>Age</th></tr></thead>
+  <tbody>
+    {{if not .}}<tr><td colspan="5" class="empty-state">No history found</td></tr>{{end}}
+    {{range .}}<tr>
+      <td>{{.Revision}}{{if .IsCurrent}} (current){{end}}</td>
+      <td>{{.Name}}</td><td>{{.Image}}</td><td>{{.Replicas}}</td><td>{{.Created}}</td>
+    </tr>{{end}}
+  </tbody>
+</table>
+{{end}}

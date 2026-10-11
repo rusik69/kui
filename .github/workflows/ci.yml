@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cmd/kui depends on webview_go (cgo). Both `go build ./...` and
+      # `go vet ./...` compile its C preamble regardless of whether the
+      # binary is ever run, so these headers are needed even just to vet.
+      - name: Install webview build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: ci
+        run: make ci

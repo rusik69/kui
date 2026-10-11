@@ -1,0 +1,93 @@
+{{define "overview"}}
+<div class="toolbar">
+  <strong>Cluster Overview</strong>
+</div>
+<div class="tile-grid">
+  <div class="stat-tile">
+    <div class="value">{{.NodeReadyCount}}/{{.NodeCount}}</div>
+    <div class="label">Nodes ready</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">{{.PodRunning}}</div>
+    <div class="label">Pods running</div>
+  </div>
+  <div class="stat-tile {{if gt .PodPending 0}}warn{{end}}">
+    <div class="value">{{.PodPending}}</div>
+    <div class="label">Pods pending</div>
+  </div>
+  <div class="stat-tile {{if gt .PodFailed 0}}danger{{end}}">
+    <div class="value">{{.PodFailed}}</div>
+    <div class="label">Pods failed</div>
+  </div>
+  <div class="stat-tile">
+    <div class="value">{{.NamespaceCount}}</div>
+    <div class="label">Namespaces</div>
+  </div>
+  <div class="stat-tile {{if gt .WarningCount 0}}warn{{end}}">
+    <div class="value">{{.WarningCount}}</div>
+    <div class="label">Warning events</div>
+  </div>
+</div>
+
+<div class="section-title">Capacity</div>
+<div class="capacity-row">
+  <div class="capacity-bar">
+    <div class="capacity-label"><span>CPU</span><span>{{pct .CPURequestedMilli .CPUAllocatableMilli}}%</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:{{pct .CPURequestedMilli .CPUAllocatableMilli}}%"></div></div>
+    <div class="capacity-sub">{{cpuFmt .CPURequestedMilli}} requested of {{cpuFmt .CPUAllocatableMilli}}</div>
+  </div>
+  <div class="capacity-bar">
+    <div class="capacity-label"><span>Memory</span><span>{{pct .MemRequestedBytes .MemAllocatableBytes}}%</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:{{pct .MemRequestedBytes .MemAllocatableBytes}}%"></div></div>
+    <div class="capacity-sub">{{memFmt .MemRequestedBytes}} requested of {{memFmt .MemAllocatableBytes}}</div>
+  </div>
+  <div class="capacity-bar">
+    <div class="capacity-label"><span>Pods</span><span>{{pct .PodsUsed .PodsAllocatable}}%</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:{{pct .PodsUsed .PodsAllocatable}}%"></div></div>
+    <div class="capacity-sub">{{.PodsUsed}} of {{.PodsAllocatable}}</div>
+  </div>
+</div>
+
+{{if .ObjectCounts}}
+<div class="section-title">Objects</div>
+<div class="objects-panel">
+  {{range .ObjectCounts}}
+  <div class="object-row">
+    <span class="object-kind">{{.Kind}}</span>
+    <span class="bar-track"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:100%"></span></span>
+    <span class="object-count">{{.Count}}</span>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if .NeedsAttention}}
+<div class="section-title">Needs attention</div>
+<table class="resource-table">
+  <thead><tr><th>Name</th><th>Reason</th><th>Ready</th></tr></thead>
+  <tbody>
+    {{range .NeedsAttention}}<tr><td>{{.Name}}</td><td>{{.Reason}}</td><td>{{.Detail}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{if .RecentActivity}}
+<div class="section-title">Recent activity</div>
+<table class="resource-table">
+  <thead><tr><th>Age</th><th>Reason</th><th>Message</th></tr></thead>
+  <tbody>
+    {{range .RecentActivity}}<tr><td>{{.Age}}</td><td>{{.Reason}}</td><td>{{.Message}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{end}}
+
+{{if .RecentWarnings}}
+<div class="section-title">Recent warnings</div>
+<table class="resource-table">
+  <thead><tr><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
+  <tbody>
+    {{range .RecentWarnings}}<tr><td>{{.Reason}}</td><td>{{.Age}}</td><td>{{.Message}}</td></tr>{{end}}
+  </tbody>
+</table>
+{{end}}
+{{end}}

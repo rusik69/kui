@@ -1,0 +1,21 @@
+{{define "yamldiff"}}
+{{if not .Changed}}
+<div class="empty-state">No changes</div>
+{{else}}
+<div class="yaml-diff">
+  {{range .Lines}}
+  {{if eq .Type "add"}}<div class="diff-line diff-add">+ {{.Text}}</div>{{end}}
+  {{if eq .Type "del"}}<div class="diff-line diff-del">- {{.Text}}</div>{{end}}
+  {{if eq .Type "eq"}}<div class="diff-line diff-eq">&nbsp; {{.Text}}</div>{{end}}
+  {{end}}
+</div>
+<form hx-put="{{.ApplyURL}}" hx-target="#yaml-result" hx-swap="innerHTML">
+  <input type="hidden" name="yaml" value="{{.YAML}}">
+  <div class="toolbar" style="border:none;padding:8px 0">
+    <button class="btn btn-primary" type="submit">Confirm apply</button>
+    <button class="btn" type="button" onclick="document.getElementById('yaml-diff-pane').innerHTML=''">Cancel</button>
+    <span id="yaml-result"></span>
+  </div>
+</form>
+{{end}}
+{{end}}

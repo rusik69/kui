@@ -1,0 +1,10 @@
+{{define "debugshell"}}
+<div class="detail-header">
+  <strong>Debug shell</strong>
+  <div class="text-dim">{{.Pod}} &middot; {{.Namespace}}</div>
+</div>
+<div class="detail-body">
+  <div id="term-pane" class="term-pane"></div>
+</div>
+<script>kui.startShell('{{.ExecWSURLBase}}')</script>
+{{end}}

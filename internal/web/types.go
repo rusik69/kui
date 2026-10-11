@@ -1,0 +1,121 @@
+package web
+
+import "github.com/rusik69/kui/internal/k8s"
+
+// ContextOption is one entry in the context switcher: ID is the
+// base64url-encoded value used in URLs, Name is the real kubeconfig context
+// name shown to the user (see ctxid.go for why these must differ).
+type ContextOption struct {
+	ID, Name string
+	Current  bool
+}
+
+// PageData backs the full-page shell ("page") and the content fragment
+// ("content") — sidebar, topbar selects, and the initial list/watch URLs.
+type PageData struct {
+	Context       string // encoded context id, used to build every URL below
+	ContextName   string // real context name, display only
+	Contexts      []ContextOption
+	Namespace     string
+	Namespaces    []string
+	Resource      string
+	Groups        []string
+	GroupKinds    map[string][]k8s.ResourceKind
+	ListURL       string
+	WatchURL      string
+	BulkDeleteURL string
+	ConnError     string // non-empty when the cluster was unreachable while building this page; shell still renders
+}
+
+// TableData backs the "table" fragment.
+type TableData struct {
+	Kind          string
+	Columns       []string
+	Rows          []Row
+	ShowNamespace bool
+	MetricsURL    string // set for pods/nodes when metrics-server may be available
+	RowsAreKinds  bool   // true for the "All resources" directory: rows navigate like sidebar links, not detail rows
+	Selectable    bool   // true when rows support bulk-select checkboxes (namespaced/cluster objects, not the kinds directory)
+	HasMetrics    bool   // true for pods/nodes: rows get a data-metric-key for client-side CPU/Mem patching
+}
+
+// Condition is one status condition shown in the Details tab.
+type Condition struct {
+	Type, Status, Reason, Message string
+}
+
+// Container is one container row shown in the Details tab.
+type Container struct {
+	Name, Image, State string
+	Ready              bool
+	Restarts           int64
+}
+
+// Event is one event row shown in the Events tab.
+type Event struct {
+	Type, Reason, Message, Age string
+}
+
+// DetailData backs the "detail" fragment for a single object.
+type DetailData struct {
+	Context, Namespace, Resource, Name, Kind string
+	Age                                      string
+	DotClass                                 string
+	Labels, Annotations                      map[string]string
+	Conditions                               []Condition
+	Containers                               []Container
+	Events                                   []Event
+	YAML                                     string
+	YAMLURL                                  string
+	YAMLDiffURL                              string
+	DeleteURL                                string
+
+	IsPod             bool
+	EvictURL          string
+	ContainerNames    []string
+	LogsWSURLBase     string
+	ExecWSURLBase     string
+	PortForwardURL    string
+	DefaultRemotePort int32
+
+	IsService bool
+
+	IsDeployment bool
+	HistoryURL   string
+}
+
+// YAMLDiffData backs the "yamldiff" fragment: a diff preview shown before
+// the real apply.
+type YAMLDiffData struct {
+	Lines    []DiffLine
+	Changed  bool
+	ApplyURL string
+	YAML     string // the edited text, carried through to the confirm-apply form
+}
+
+// DebugShellData backs the "debugshell" fragment.
+type DebugShellData struct {
+	Pod, Namespace, ExecWSURLBase string
+}
+
+// AttentionItem is one unhealthy pod shown in Overview's "Needs attention" list.
+type AttentionItem struct {
+	Name, Namespace, Reason, Detail string
+}
+
+// OverviewData backs the "overview" fragment: cluster-wide summary tiles.
+type OverviewData struct {
+	NodeCount, NodeReadyCount                                 int
+	NamespaceCount                                            int
+	PodRunning, PodPending, PodFailed, PodSucceeded, PodOther int
+	WarningCount                                              int
+	RecentWarnings                                            []Event
+
+	CPURequestedMilli, CPUAllocatableMilli int64
+	MemRequestedBytes, MemAllocatableBytes int64
+	PodsUsed, PodsAllocatable              int64
+
+	NeedsAttention []AttentionItem
+	RecentActivity []Event
+	ObjectCounts   []ObjectCount
+}

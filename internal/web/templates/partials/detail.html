@@ -1,0 +1,108 @@
+{{define "detail"}}
+<div class="detail-header">
+  <div class="detail-header-row">
+    <div>{{if .DotClass}}<span class="dot {{.DotClass}}"></span>{{end}}<strong>{{.Name}}</strong></div>
+    <div class="icon-actions">
+      <button type="button" class="icon-btn" title="Delete"
+              hx-delete="{{.DeleteURL}}" hx-confirm="Delete {{.Kind}} {{.Name}}?"
+              hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-trash"/></svg></button>
+      {{if .IsPod}}<button type="button" class="icon-btn" title="Evict" hx-delete="{{.EvictURL}}" hx-confirm="Evict pod {{.Name}}?"
+              hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-eject"/></svg></button>{{end}}
+      <button type="button" class="icon-btn" title="Close" onclick="kui.closeDetail()"><svg class="icon"><use href="#icon-close"/></svg></button>
+    </div>
+  </div>
+  <div class="text-dim">{{.Kind}} &middot; {{.Namespace}} &middot; {{.Age}}</div>
+  <div class="tab-row">
+    <button type="button" class="tab-btn active" onclick="kui.showTab(this,'tab-details')">Details</button>
+    <button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-yaml')">YAML</button>
+    <button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-events')">Events</button>
+    {{if .IsPod}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-logs')">Logs</button>{{end}}
+    {{if .IsPod}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-shell')">Shell</button>{{end}}
+    {{if .IsDeployment}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-history')">History</button>{{end}}
+    {{if or .IsPod .IsService}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-forward')">Port-forward</button>{{end}}
+  </div>
+</div>
+
+<div class="detail-body">
+
+  <div id="tab-details" class="detail-tab-panel">
+    <div class="section-title">Metadata</div>
+    <dl class="kv-grid">
+      <dt>Name</dt><dd>{{.Name}}</dd>
+      <dt>Namespace</dt><dd>{{.Namespace}}</dd>
+      <dt>Age</dt><dd>{{.Age}}</dd>
+      <dt>Labels</dt><dd><div class="pill-row">{{range $k,$v := .Labels}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
+      <dt>Annotations</dt><dd><div class="pill-row">{{range $k,$v := .Annotations}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
+    </dl>
+
+    {{if .Conditions}}
+    <div class="section-title">Conditions</div>
+    <table class="resource-table">
+      <thead><tr><th>Type</th><th>Status</th><th>Reason</th><th>Message</th></tr></thead>
+      <tbody>{{range .Conditions}}<tr><td>{{.Type}}</td><td>{{.Status}}</td><td>{{.Reason}}</td><td>{{.Message}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+
+    {{if .Containers}}
+    <div class="section-title">Containers</div>
+    <table class="resource-table">
+      <thead><tr><th>Name</th><th>Image</th><th>Ready</th><th>Restarts</th><th>State</th></tr></thead>
+      <tbody>{{range .Containers}}<tr><td>{{.Name}}</td><td>{{.Image}}</td><td>{{.Ready}}</td><td>{{.Restarts}}</td><td>{{.State}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+  </div>
+
+  <div id="tab-yaml" class="detail-tab-panel" style="display:none">
+    <form hx-put="{{.YAMLDiffURL}}" hx-target="#yaml-diff-pane" hx-swap="innerHTML">
+      <input type="hidden" name="original" value="{{.YAML}}">
+      <textarea class="yaml-editor" name="yaml" spellcheck="false">{{.YAML}}</textarea>
+      <div class="toolbar" style="border:none;padding:8px 0">
+        <button class="btn btn-primary" type="submit"><svg class="icon"><use href="#icon-pencil"/></svg>Review changes</button>
+        <span id="yaml-result"></span>
+      </div>
+    </form>
+    <div id="yaml-diff-pane"></div>
+  </div>
+
+  <div id="tab-events" class="detail-tab-panel" style="display:none">
+    <table class="resource-table">
+      <thead><tr><th>Type</th><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
+      <tbody>
+        {{if not .Events}}<tr><td colspan="4" class="empty-state">No events</td></tr>{{end}}
+        {{range .Events}}<tr><td>{{.Type}}</td><td>{{.Reason}}</td><td>{{.Age}}</td><td>{{.Message}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if .IsPod}}
+  <div id="tab-logs" class="detail-tab-panel" style="display:none">
+    <select id="log-container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+    <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Tail</button>
+    <div id="logs-pane" class="log-pane"></div>
+  </div>
+
+  <div id="tab-shell" class="detail-tab-panel" style="display:none">
+    <select id="shell-container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+    <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
+    <div id="term-pane" class="term-pane"></div>
+  </div>
+
+  <div id="tab-forward" class="detail-tab-panel" style="display:none">
+    <form hx-post="{{.PortForwardURL}}" hx-target="#forward-result" hx-swap="innerHTML">
+      <label>Local port <input type="number" name="localPort" required></label>
+      <label>Remote port <input type="number" name="remotePort" required value="{{.DefaultRemotePort}}"></label>
+      <button class="btn btn-primary" type="submit">Start</button>
+    </form>
+    <div id="forward-result"></div>
+  </div>
+  {{end}}
+
+  {{if .IsDeployment}}
+  <div id="tab-history" class="detail-tab-panel" style="display:none"
+       hx-get="{{.HistoryURL}}" hx-trigger="revealed" hx-swap="innerHTML">
+    <div class="loading-state">Loading history&hellip;</div>
+  </div>
+  {{end}}
+
+</div>
+{{end}}

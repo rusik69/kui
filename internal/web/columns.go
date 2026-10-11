@@ -211,17 +211,27 @@ func podRow(obj *unstructured.Unstructured, name, ns, age string) Row {
 	}
 }
 
+// readinessDot gives the shared "ready-vs-desired" dot color used by
+// Deployments/ReplicaSets/StatefulSets/DaemonSets/Jobs: gray for an
+// intentional desired==0 (scale-down), green once ready has caught up,
+// yellow otherwise.
+func readinessDot(ready, desired int64) string {
+	if desired == 0 {
+		return "dot-gray"
+	}
+	if ready == desired {
+		return "dot-green"
+	}
+	return "dot-yellow"
+}
+
 func deploymentRow(obj *unstructured.Unstructured, name, ns, age string) Row {
 	desired, _, _ := unstructured.NestedInt64(obj.Object, "spec", "replicas")
 	ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
 	upToDate, _, _ := unstructured.NestedInt64(obj.Object, "status", "updatedReplicas")
 	available, _, _ := unstructured.NestedInt64(obj.Object, "status", "availableReplicas")
-	dot := "dot-yellow"
-	if ready == desired && desired > 0 {
-		dot = "dot-green"
-	}
 	return Row{
-		Name: name, Namespace: ns, DotClass: dot,
+		Name: name, Namespace: ns, DotClass: readinessDot(ready, desired),
 		Cells: []string{name, fmt.Sprintf("%d/%d", ready, desired), fmt.Sprintf("%d", upToDate), fmt.Sprintf("%d", available), age},
 	}
 }
@@ -230,32 +240,19 @@ func replicaSetRow(obj *unstructured.Unstructured, name, ns, age string) Row {
 	desired, _, _ := unstructured.NestedInt64(obj.Object, "spec", "replicas")
 	current, _, _ := unstructured.NestedInt64(obj.Object, "status", "replicas")
 	ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
-	dot := "dot-yellow"
-	if ready == desired && desired > 0 {
-		dot = "dot-green"
-	} else if desired == 0 {
-		dot = "dot-gray"
-	}
-	return Row{Name: name, Namespace: ns, DotClass: dot, Cells: []string{name, fmt.Sprintf("%d", desired), fmt.Sprintf("%d", current), fmt.Sprintf("%d", ready), age}}
+	return Row{Name: name, Namespace: ns, DotClass: readinessDot(ready, desired), Cells: []string{name, fmt.Sprintf("%d", desired), fmt.Sprintf("%d", current), fmt.Sprintf("%d", ready), age}}
 }
 
 func simpleReadyRow(obj *unstructured.Unstructured, name, ns, age string) Row {
 	ready, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
 	total, _, _ := unstructured.NestedInt64(obj.Object, "status", "replicas")
-	dot := "dot-yellow"
-	if ready == total && total > 0 {
-		dot = "dot-green"
-	}
-	return Row{Name: name, Namespace: ns, DotClass: dot, Cells: []string{name, fmt.Sprintf("%d/%d", ready, total), age}}
+	return Row{Name: name, Namespace: ns, DotClass: readinessDot(ready, total), Cells: []string{name, fmt.Sprintf("%d/%d", ready, total), age}}
 }
 
 func jobRow(obj *unstructured.Unstructured, name, ns, age string) Row {
 	succeeded, _, _ := unstructured.NestedInt64(obj.Object, "status", "succeeded")
 	completions, _, _ := unstructured.NestedInt64(obj.Object, "spec", "completions")
-	dot := "dot-yellow"
-	if succeeded >= completions && completions > 0 {
-		dot = "dot-green"
-	}
+	dot := readinessDot(succeeded, completions)
 	dur := ""
 	if start, ok, _ := unstructured.NestedString(obj.Object, "status", "startTime"); ok {
 		if t, err := time.Parse(time.RFC3339, start); err == nil {

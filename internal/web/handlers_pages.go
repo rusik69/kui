@@ -20,7 +20,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleContextPage(w http.ResponseWriter, r *http.Request) {
 	ctxName := r.PathValue("ctx")
-	data, err := s.buildPageData(ctxName, "_all", "overview")
+	data, err := s.buildPageData(r.Context(), ctxName, "_all", "overview")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -39,7 +39,7 @@ func (s *Server) handleContextPage(w http.ResponseWriter, r *http.Request) {
 // ConnError and surfaced inline instead of failing this function. Only a
 // genuinely unreadable kubeconfig (decodeCtx/ListContexts) is fatal — there's
 // no usable shell to render at all in that case.
-func (s *Server) buildPageData(ctxID, ns, resource string) (PageData, error) {
+func (s *Server) buildPageData(ctx context.Context, ctxID, ns, resource string) (PageData, error) {
 	ctxName, err := decodeCtx(ctxID)
 	if err != nil {
 		return PageData{}, err
@@ -58,7 +58,7 @@ func (s *Server) buildPageData(ctxID, ns, resource string) (PageData, error) {
 	c, err := s.clients(ctxID)
 	if err != nil {
 		connErr = err.Error()
-	} else if namespaces, err = listNamespaceNames(c); err != nil {
+	} else if namespaces, err = listNamespaceNames(ctx, c); err != nil {
 		connErr = err.Error()
 	}
 
@@ -83,8 +83,8 @@ func (s *Server) buildPageData(ctxID, ns, resource string) (PageData, error) {
 	}, nil
 }
 
-func listNamespaceNames(c *k8s.Clients) ([]string, error) {
-	list, err := c.Clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+func listNamespaceNames(ctx context.Context, c *k8s.Clients) ([]string, error) {
+	list, err := c.Clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}

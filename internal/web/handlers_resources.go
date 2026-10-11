@@ -23,6 +23,13 @@ func nsOrDash(ns string) string {
 	return ns
 }
 
+// resourcePath builds the base "/c/{ctx}/{ns}/{resource}/{name}" URL shared
+// by DetailURL/YAMLDiffURL/DeleteURL/EvictURL/the YAML-diff apply URL —
+// callers append their own suffix (e.g. "/yaml", "?evict=true").
+func resourcePath(ctxName, namespace, resourceName, objName string) string {
+	return fmt.Sprintf("/c/%s/%s/%s/%s", ctxName, nsOrDash(namespace), resourceName, objName)
+}
+
 // insertBeforeLast inserts items just before the final element of s (used to
 // slot CPU/Mem columns in ahead of the trailing Age column).
 func insertBeforeLast(s []string, items ...string) []string {
@@ -90,14 +97,14 @@ func (s *Server) handleResourceList(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Query().Get("frame") == "table":
 		s.render(w, "table", table)
 	case r.Header.Get("HX-Request") == "true":
-		data, err := s.buildPageData(ctxName, ns, resource)
+		data, err := s.buildPageData(r.Context(), ctxName, ns, resource)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		s.render(w, "content", data)
 	default:
-		data, err := s.buildPageData(ctxName, ns, resource)
+		data, err := s.buildPageData(r.Context(), ctxName, ns, resource)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -123,7 +130,7 @@ func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.Reso
 	for i := range list.Items {
 		obj := &list.Items[i]
 		row := RowCells(rk.Name, obj)
-		row.DetailURL = fmt.Sprintf("/c/%s/%s/%s/%s", ctxName, nsOrDash(obj.GetNamespace()), rk.Name, obj.GetName())
+		row.DetailURL = resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName())
 		if hasMetrics {
 			hadClasses := len(row.CellClasses) == len(row.Cells)
 			row.Cells = insertBeforeLast(row.Cells, "–", "–")
@@ -169,7 +176,7 @@ func (s *Server) renderAllResourcesDirectory(w http.ResponseWriter, r *http.Requ
 	}
 
 	if r.Header.Get("HX-Request") == "true" && r.URL.Query().Get("frame") != "table" {
-		data, err := s.buildPageData(ctxName, ns, "all")
+		data, err := s.buildPageData(r.Context(), ctxName, ns, "all")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -181,7 +188,7 @@ func (s *Server) renderAllResourcesDirectory(w http.ResponseWriter, r *http.Requ
 		s.render(w, "table", table)
 		return
 	}
-	data, err := s.buildPageData(ctxName, ns, "all")
+	data, err := s.buildPageData(r.Context(), ctxName, ns, "all")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -233,9 +240,8 @@ func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.Res
 		Labels:      obj.GetLabels(),
 		Annotations: obj.GetAnnotations(),
 		YAML:        string(yamlBytes),
-		YAMLURL:     fmt.Sprintf("/c/%s/%s/%s/%s/yaml", ctxName, nsOrDash(obj.GetNamespace()), rk.Name, obj.GetName()),
-		YAMLDiffURL: fmt.Sprintf("/c/%s/%s/%s/%s/yaml/diff", ctxName, nsOrDash(obj.GetNamespace()), rk.Name, obj.GetName()),
-		DeleteURL:   fmt.Sprintf("/c/%s/%s/%s/%s", ctxName, nsOrDash(obj.GetNamespace()), rk.Name, obj.GetName()),
+		YAMLDiffURL: resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName()) + "/yaml/diff",
+		DeleteURL:   resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName()),
 	}
 
 	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
@@ -253,7 +259,7 @@ func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.Res
 
 	if rk.Name == "pods" {
 		d.IsPod = true
-		d.EvictURL = fmt.Sprintf("/c/%s/%s/%s/%s?evict=true", ctxName, nsOrDash(obj.GetNamespace()), rk.Name, obj.GetName())
+		d.EvictURL = resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName()) + "?evict=true"
 		wsBase := fmt.Sprintf("/c/%s/%s/pods/%s", ctxName, obj.GetNamespace(), obj.GetName())
 		d.LogsWSURLBase = wsBase + "/logs"
 		d.ExecWSURLBase = wsBase + "/exec"
@@ -311,6 +317,70 @@ func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.Res
 	if rk.Name == "deployments" {
 		d.IsDeployment = true
 		d.HistoryURL = fmt.Sprintf("/c/%s/%s/deployments/%s/history", ctxName, nsOrDash(obj.GetNamespace()), obj.GetName())
+	}
+
+	if rk.Name == "nodes" {
+		d.IsNode = true
+
+		addrs, _, _ := unstructured.NestedSlice(obj.Object, "status", "addresses")
+		for _, item := range addrs {
+			am, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t, _, _ := unstructured.NestedString(am, "type")
+			a, _, _ := unstructured.NestedString(am, "address")
+			d.Addresses = append(d.Addresses, NodeAddress{Type: t, Address: a})
+		}
+
+		d.NodeInfo.OS, _, _ = unstructured.NestedString(obj.Object, "status", "nodeInfo", "operatingSystem")
+		d.NodeInfo.Arch, _, _ = unstructured.NestedString(obj.Object, "status", "nodeInfo", "architecture")
+		d.NodeInfo.Kernel, _, _ = unstructured.NestedString(obj.Object, "status", "nodeInfo", "kernelVersion")
+		d.NodeInfo.Runtime, _, _ = unstructured.NestedString(obj.Object, "status", "nodeInfo", "containerRuntimeVersion")
+
+		taints, _, _ := unstructured.NestedSlice(obj.Object, "spec", "taints")
+		for _, item := range taints {
+			tm, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			key, _, _ := unstructured.NestedString(tm, "key")
+			value, _, _ := unstructured.NestedString(tm, "value")
+			effect, _, _ := unstructured.NestedString(tm, "effect")
+			d.Taints = append(d.Taints, NodeTaint{Key: key, Value: value, Effect: effect})
+		}
+
+		d.CPUAllocatable, _, _ = unstructured.NestedString(obj.Object, "status", "allocatable", "cpu")
+		d.MemAllocatable, _, _ = unstructured.NestedString(obj.Object, "status", "allocatable", "memory")
+		d.PodsAllocatable, _, _ = unstructured.NestedString(obj.Object, "status", "allocatable", "pods")
+
+		pods, err := c.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+			FieldSelector: "spec.nodeName=" + obj.GetName(),
+		})
+		if err == nil {
+			for _, p := range pods.Items {
+				d.PodsOnNode = append(d.PodsOnNode, PodOnNode{
+					Name:      p.Name,
+					Namespace: p.Namespace,
+					Status:    podStateTyped(p),
+					DetailURL: fmt.Sprintf("/c/%s/%s/pods/%s", ctxName, p.Namespace, p.Name),
+				})
+			}
+		}
+	}
+
+	if rk.Name == "secrets" {
+		d.IsSecret = true
+		data, _, _ := unstructured.NestedMap(obj.Object, "data")
+		keys := make([]string, 0, len(data))
+		for k := range data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v, _ := data[k].(string)
+			d.SecretData = append(d.SecretData, SecretEntry{Key: k, Value: v})
+		}
 	}
 
 	events, err := c.Clientset.CoreV1().Events(obj.GetNamespace()).Search(scheme.Scheme, obj)
@@ -429,7 +499,7 @@ func (s *Server) handleYAMLDiff(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	applyURL := fmt.Sprintf("/c/%s/%s/%s/%s/yaml", ctxName, nsOrDash(ns), rk.Name, name)
+	applyURL := resourcePath(ctxName, ns, rk.Name, name) + "/yaml"
 	s.render(w, "yamldiff", YAMLDiffData{Lines: lines, Changed: changed, ApplyURL: applyURL, YAML: edited})
 }
 

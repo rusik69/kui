@@ -50,6 +50,53 @@
       <tbody>{{range .Containers}}<tr><td>{{.Name}}</td><td>{{.Image}}</td><td>{{.Ready}}</td><td>{{.Restarts}}</td><td>{{.State}}</td></tr>{{end}}</tbody>
     </table>
     {{end}}
+
+    {{if .IsNode}}
+    <div class="section-title">Info</div>
+    <dl class="kv-grid">
+      <dt>Addresses</dt><dd>{{range .Addresses}}{{.Type}}: {{.Address}}<br>{{end}}</dd>
+      <dt>OS / Arch</dt><dd>{{.NodeInfo.OS}} / {{.NodeInfo.Arch}}</dd>
+      <dt>Kernel</dt><dd>{{.NodeInfo.Kernel}}</dd>
+      <dt>Runtime</dt><dd>{{.NodeInfo.Runtime}}</dd>
+    </dl>
+
+    <div class="section-title">Capacity (allocatable)</div>
+    <dl class="kv-grid">
+      <dt>CPU</dt><dd>{{.CPUAllocatable}}</dd>
+      <dt>Memory</dt><dd>{{.MemAllocatable}}</dd>
+      <dt>Pods</dt><dd>{{.PodsAllocatable}}</dd>
+    </dl>
+
+    {{if .Taints}}
+    <div class="section-title">Taints</div>
+    <table class="resource-table">
+      <thead><tr><th>Key</th><th>Value</th><th>Effect</th></tr></thead>
+      <tbody>{{range .Taints}}<tr><td>{{.Key}}</td><td>{{.Value}}</td><td>{{.Effect}}</td></tr>{{end}}</tbody>
+    </table>
+    {{end}}
+
+    <div class="section-title">Pods on this node</div>
+    <table class="resource-table">
+      <thead><tr><th>Name</th><th>Namespace</th><th>Status</th></tr></thead>
+      <tbody>
+        {{if not .PodsOnNode}}<tr><td colspan="3" class="empty-state">No pods</td></tr>{{end}}
+        {{range .PodsOnNode}}<tr hx-get="{{.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"><td>{{.Name}}</td><td>{{.Namespace}}</td><td>{{.Status}}</td></tr>{{end}}
+      </tbody>
+    </table>
+    {{end}}
+
+    {{if .IsSecret}}
+    <div class="section-title">Data</div>
+    <div class="secret-data">
+      {{range .SecretData}}
+      <div class="secret-row">
+        <span class="secret-key">{{.Key}}</span>
+        <span class="secret-value masked" data-b64="{{.Value}}">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;</span>
+        <button type="button" class="btn" onclick="kui.toggleSecretValue(this)">Show</button>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
   </div>
 
   <div id="tab-yaml" class="detail-tab-panel" style="display:none">

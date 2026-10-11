@@ -66,7 +66,6 @@ type DetailData struct {
 	Containers                               []Container
 	Events                                   []Event
 	YAML                                     string
-	YAMLURL                                  string
 	YAMLDiffURL                              string
 	DeleteURL                                string
 
@@ -82,7 +81,38 @@ type DetailData struct {
 
 	IsDeployment bool
 	HistoryURL   string
+
+	IsNode          bool
+	Addresses       []NodeAddress
+	NodeInfo        NodeInfo
+	Taints          []NodeTaint
+	CPUAllocatable  string
+	MemAllocatable  string
+	PodsAllocatable string
+	PodsOnNode      []PodOnNode
+
+	IsSecret   bool
+	SecretData []SecretEntry
 }
+
+// NodeAddress is one entry from a Node's status.addresses.
+type NodeAddress struct{ Type, Address string }
+
+// NodeInfo is the subset of a Node's status.nodeInfo shown in its detail pane.
+type NodeInfo struct{ OS, Arch, Kernel, Runtime string }
+
+// NodeTaint is one entry from a Node's spec.taints.
+type NodeTaint struct{ Key, Value, Effect string }
+
+// PodOnNode is one row in a Node detail's "Pods on this node" table.
+type PodOnNode struct {
+	Name, Namespace, Status string
+	DetailURL               string
+}
+
+// SecretEntry is one key in a Secret's data map — Value is the raw base64
+// string as stored; decoding happens client-side only on explicit reveal.
+type SecretEntry struct{ Key, Value string }
 
 // YAMLDiffData backs the "yamldiff" fragment: a diff preview shown before
 // the real apply.
@@ -105,11 +135,11 @@ type AttentionItem struct {
 
 // OverviewData backs the "overview" fragment: cluster-wide summary tiles.
 type OverviewData struct {
-	NodeCount, NodeReadyCount                                 int
-	NamespaceCount                                            int
-	PodRunning, PodPending, PodFailed, PodSucceeded, PodOther int
-	WarningCount                                              int
-	RecentWarnings                                            []Event
+	NodeCount, NodeReadyCount         int
+	NamespaceCount                    int
+	PodRunning, PodPending, PodFailed int
+	WarningCount                      int
+	RecentWarnings                    []Event
 
 	CPURequestedMilli, CPUAllocatableMilli int64
 	MemRequestedBytes, MemAllocatableBytes int64

@@ -58,6 +58,15 @@
     <div id="palette-results"></div>
   </div>
 </div>
+<div class="confirm-overlay" id="confirm-overlay" style="display:none">
+  <div class="confirm-modal">
+    <p id="confirm-message"></p>
+    <div class="toolbar">
+      <button type="button" class="btn" id="confirm-cancel">Cancel</button>
+      <button type="button" class="btn btn-danger" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
 <div class="statusbar" id="statusbar"
      hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML">
   Live

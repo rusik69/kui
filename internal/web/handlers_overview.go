@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +28,7 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 		return
 	}
 
-	page, err := s.buildPageData(ctxName, ns, "overview")
+	page, err := s.buildPageData(r.Context(), ctxName, ns, "overview")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -42,10 +43,53 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns string) (OverviewData, error) {
 	var d OverviewData
 
-	nodes, err := c.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return d, err
+	var (
+		nodes    *corev1.NodeList
+		nodesErr error
+
+		namespaces []string
+		nsErr      error
+
+		pods    *corev1.PodList
+		podsErr error
+
+		events *corev1.EventList
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		nodes, nodesErr = c.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	}()
+	go func() {
+		defer wg.Done()
+		namespaces, nsErr = listNamespaceNames(ctx, c)
+	}()
+	go func() {
+		defer wg.Done()
+		pods, podsErr = c.Clientset.CoreV1().Pods(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
+	}()
+	go func() {
+		defer wg.Done()
+		events, _ = c.Clientset.CoreV1().Events(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
+	}()
+
+	fanCtx, cancel := context.WithTimeout(ctx, fanOutTimeout)
+	d.ObjectCounts = countsFromFanOut(k8s.FanOutList(fanCtx, c, ns))
+	cancel()
+
+	wg.Wait()
+	if nodesErr != nil {
+		return d, nodesErr
 	}
+	if nsErr != nil {
+		return d, nsErr
+	}
+	if podsErr != nil {
+		return d, podsErr
+	}
+
 	d.NodeCount = len(nodes.Items)
 	for _, n := range nodes.Items {
 		if nodeReady(n.Status.Conditions) {
@@ -56,19 +100,10 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 		d.PodsAllocatable += n.Status.Allocatable.Pods().Value()
 	}
 
-	namespaces, err := listNamespaceNames(c)
-	if err != nil {
-		return d, err
-	}
 	d.NamespaceCount = len(namespaces)
 
-	pods, err := c.Clientset.CoreV1().Pods(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return d, err
-	}
 	tally := tallyPodPhases(pods.Items)
-	d.PodRunning, d.PodPending, d.PodFailed, d.PodSucceeded, d.PodOther =
-		tally.Running, tally.Pending, tally.Failed, tally.Succeeded, tally.Other
+	d.PodRunning, d.PodPending, d.PodFailed = tally.Running, tally.Pending, tally.Unhealthy
 
 	d.PodsUsed = int64(len(pods.Items))
 	for _, p := range pods.Items {
@@ -76,7 +111,7 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 			d.CPURequestedMilli += cont.Resources.Requests.Cpu().MilliValue()
 			d.MemRequestedBytes += cont.Resources.Requests.Memory().Value()
 		}
-		if state := podStateTyped(p); state != string(corev1.PodRunning) && state != string(corev1.PodSucceeded) {
+		if state := podStateTyped(p); podStateIsBad(state) {
 			if len(d.NeedsAttention) < 8 {
 				ready := 0
 				for _, cs := range p.Status.ContainerStatuses {
@@ -92,12 +127,7 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 		}
 	}
 
-	fanCtx, cancel := context.WithTimeout(ctx, fanOutTimeout)
-	d.ObjectCounts = countsFromFanOut(k8s.FanOutList(fanCtx, c, ns))
-	cancel()
-
-	events, err := c.Clientset.CoreV1().Events(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
-	if err == nil {
+	if events != nil {
 		var warnings []corev1.Event
 		for _, ev := range events.Items {
 			if ev.Type == corev1.EventTypeWarning {

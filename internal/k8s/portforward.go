@@ -90,14 +90,3 @@ func (m *ForwardManager) Stop(id string) bool {
 	delete(m.live, id)
 	return true
 }
-
-// List returns every currently active forward.
-func (m *ForwardManager) List() []*ForwardHandle {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]*ForwardHandle, 0, len(m.live))
-	for _, h := range m.live {
-		out = append(out, h)
-	}
-	return out
-}

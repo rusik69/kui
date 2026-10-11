@@ -3,7 +3,9 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -96,7 +98,7 @@ func AllAPIResources(c *Clients) ([]ResourceKind, error) {
 			continue
 		}
 		for _, r := range l.APIResources {
-			if !canListAndWatch(r.Verbs) || containsSlash(r.Name) {
+			if !canListAndWatch(r.Verbs) || strings.Contains(r.Name, "/") {
 				continue
 			}
 			out = append(out, ResourceKind{
@@ -113,24 +115,7 @@ func AllAPIResources(c *Clients) ([]ResourceKind, error) {
 }
 
 func canListAndWatch(verbs metav1.Verbs) bool {
-	has := func(v string) bool {
-		for _, x := range verbs {
-			if x == v {
-				return true
-			}
-		}
-		return false
-	}
-	return has("list") && has("watch")
-}
-
-func containsSlash(name string) bool {
-	for _, c := range name {
-		if c == '/' {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(verbs, "list") && slices.Contains(verbs, "watch")
 }
 
 // List returns every object of the given kind, scoped to namespace unless

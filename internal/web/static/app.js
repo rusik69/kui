@@ -340,6 +340,32 @@ window.kui = (function () {
 		if (overlay) overlay.style.display = "none";
 	}
 
+	// Replaces native hx-confirm's unstyled OS dialog — see the global
+	// htmx:confirm listener in the wiring section, which intercepts every
+	// hx-confirm-bearing element with no per-button changes needed.
+	function showConfirmModal(message, onConfirm) {
+		const overlay = document.getElementById("confirm-overlay");
+		const messageEl = document.getElementById("confirm-message");
+		const okBtn = document.getElementById("confirm-ok");
+		const cancelBtn = document.getElementById("confirm-cancel");
+		if (!overlay || !messageEl || !okBtn || !cancelBtn) {
+			onConfirm(); // fail open rather than silently blocking the action
+			return;
+		}
+		messageEl.textContent = message;
+		overlay.style.display = "flex";
+
+		const cleanup = () => {
+			overlay.style.display = "none";
+			okBtn.removeEventListener("click", onOk);
+			cancelBtn.removeEventListener("click", onCancel);
+		};
+		const onOk = () => { cleanup(); onConfirm(); };
+		const onCancel = () => cleanup();
+		okBtn.addEventListener("click", onOk);
+		cancelBtn.addEventListener("click", onCancel);
+	}
+
 	function movePaletteSelection(key) {
 		const items = Array.from(document.querySelectorAll("#palette-results .palette-result"));
 		if (!items.length) return;
@@ -407,6 +433,33 @@ window.kui = (function () {
 		setThemeIcon(next);
 	}
 
+	// ---- secret value reveal ----
+
+	// Secret values are already present in the page (as base64, in a
+	// data-b64 attribute) — decoding happens entirely client-side, no
+	// server round trip, no plaintext ever sent beyond what was already
+	// fetched for this object.
+	function toggleSecretValue(btn) {
+		const valueEl = btn.previousElementSibling;
+		if (!valueEl) return;
+		if (valueEl.classList.contains("masked")) {
+			let decoded;
+			try {
+				const bytes = Uint8Array.from(atob(valueEl.dataset.b64), (c) => c.charCodeAt(0));
+				decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+			} catch (e) {
+				decoded = "(unable to decode)";
+			}
+			valueEl.textContent = decoded;
+			valueEl.classList.remove("masked");
+			btn.textContent = "Hide";
+		} else {
+			valueEl.textContent = "••••••••";
+			valueEl.classList.add("masked");
+			btn.textContent = "Show";
+		}
+	}
+
 	// ---- wiring ----
 
 	document.addEventListener("DOMContentLoaded", initSplitter);
@@ -433,6 +486,15 @@ window.kui = (function () {
 	});
 
 	document.body.addEventListener("toast", (e) => showToast(e.detail.toast));
+
+	// Intercepts every hx-confirm-bearing element globally — no per-button
+	// wiring needed for the two existing call sites (Delete/Evict) or any
+	// future one.
+	document.body.addEventListener("htmx:confirm", (e) => {
+		if (!e.detail.question) return;
+		e.preventDefault();
+		showConfirmModal(e.detail.question, () => e.detail.issueRequest(true));
+	});
 
 	// htmx only swaps 2xx responses by default — a failed fragment request
 	// (e.g. cluster unreachable) would otherwise fail completely silently,
@@ -486,5 +548,6 @@ window.kui = (function () {
 		openPalette,
 		closePalette,
 		toggleTheme,
+		toggleSecretValue,
 	};
 })();

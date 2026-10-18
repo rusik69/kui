@@ -46,10 +46,10 @@
     {{end}}
     {{range $row := .Rows}}
     {{if $.RowsAreKinds}}
-    <tr tabindex="0" aria-selected="false" hx-trigger="click, keydown[key=='Enter']" hx-get="{{$row.DetailURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
+    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}">
     {{else}}
-    <tr tabindex="0" aria-selected="false" hx-trigger="click, keydown[key=='Enter']" hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"
+    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}"
         {{if $.HasMetrics}}data-metric-key="{{metricKey $row.Namespace $row.Name}}"{{end}}>
     {{end}}

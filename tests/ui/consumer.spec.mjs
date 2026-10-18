@@ -133,6 +133,15 @@ test("resource table filtering, sorting, and selection update visible results", 
   await expect(page.locator("#list-pane #kui-table tbody tr[data-name='alpha'] .row-select")).toBeChecked();
 });
 
+test("keyboard activation of an in-row copy button does not open its row detail", async ({ page }) => {
+  await openResource(page, "pods");
+  const row = page.locator('#list-pane #kui-table tbody tr[data-name="alpha"]');
+  const copy = row.getByRole("button", { name: "Copy resource name" });
+  await copy.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#detail-pane .detail-header")).toHaveCount(0);
+});
+
 test("detail tabs are keyboard-operable and resizing survives HTMX swaps", async ({ page }) => {
   await openResource(page, "pods");
   const alpha = await openDetail(page, "pods", "alpha");

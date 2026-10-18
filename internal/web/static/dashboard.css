@@ -102,3 +102,12 @@
 @media (prefers-reduced-motion: reduce) {
 	#overview *, #overview *::before, #overview *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* Keep tile actions quiet until they are needed without removing keyboard access. */
+.overview-pin { opacity: 0; transition: opacity .14s ease, border-color .14s ease, background-color .14s ease; }
+.stat-tile-shell:hover .overview-pin,
+.stat-tile-shell:focus-within .overview-pin,
+.overview-pin[aria-pressed="true"] { opacity: 1; }
+@media (hover: none) {
+	.overview-pin { opacity: 1; }
+}

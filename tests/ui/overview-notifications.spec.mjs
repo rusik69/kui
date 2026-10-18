@@ -1,8 +1,37 @@
 import { test, expect } from "./fixtures/application.mjs";
 
+async function expandNotifications(page) {
+  const center = page.locator(".notification-center");
+  if (!(await center.evaluate(element => element.open))) await center.locator("summary").click();
+}
+
 test.beforeEach(async ({ app, page }) => {
   await page.goto(app.url);
   await expect(page.locator("#overview")).toBeVisible();
+});
+
+test("notification center stays compact until opened and exposes unread count", async ({ page }) => {
+  const center = page.locator(".notification-center");
+  await expect(center).not.toHaveAttribute("open");
+  await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+  await expect(page.locator("#notification-list")).toBeHidden();
+  await expect(page.locator("#notification-unread")).toHaveText(/\d+ unread/);
+  await expandNotifications(page);
+  await expect(page.locator("#notification-list")).toBeVisible();
+});
+
+test("expanded notifications stay within a narrow viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expandNotifications(page);
+  const layout = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+    centerRight: document.querySelector(".notification-center").getBoundingClientRect().right,
+    inputRights: [...document.querySelectorAll(".notification-controls input[type=search]")].map(input => input.getBoundingClientRect().right),
+  }));
+  expect(layout.documentWidth).toBe(layout.clientWidth);
+  expect(layout.centerRight).toBeLessThanOrEqual(layout.clientWidth);
+  expect(layout.inputRights.every(right => right <= layout.clientWidth)).toBeTruthy();
 });
 
 test("overview refresh controls and snapshot exports are scoped and accessible", async ({ page }) => {
@@ -34,10 +63,12 @@ test("capacity thresholds validate range and event summaries can be filtered", a
 
 test("notification center retains read state and quiet preference", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /Notifications/ })).toBeVisible();
+  await expandNotifications(page);
 
   const quiet = page.getByRole("checkbox", { name: "Quiet mode" });
   await quiet.check();
   await page.reload();
+  await expandNotifications(page);
   await expect(page.getByRole("checkbox", { name: "Quiet mode" })).toBeChecked();
   const key = `kui.notifications.v1:${encodeURIComponent(await page.locator("#overview").getAttribute("data-context"))}:dev`;
   await expect.poll(() => page.evaluate(storageKey => JSON.parse(localStorage.getItem(storageKey) || "{\"items\":[]}").items.length, key)).toBeGreaterThan(0);
@@ -45,6 +76,7 @@ test("notification center retains read state and quiet preference", async ({ pag
   await first.getByRole("button", { name: "Mark read" }).click();
   await expect(first.getByRole("button", { name: "Mark unread" })).toBeVisible();
   await page.reload();
+  await expandNotifications(page);
   await expect(page.getByRole("checkbox", { name: "Quiet mode" })).toBeChecked();
   await expect(page.locator("#notification-list li").first().getByRole("button", { name: "Mark unread" })).toBeVisible();
   const severity = page.locator("#notification-severity");
@@ -52,10 +84,12 @@ test("notification center retains read state and quiet preference", async ({ pag
   const warningCount = await page.evaluate(storageKey => JSON.parse(localStorage.getItem(storageKey)).items.filter(item => item.severity === "Warning").length, key);
   await expect(page.locator("#notification-list li")).toHaveCount(warningCount);
   await page.reload();
+  await expandNotifications(page);
   await expect(page.locator("#notification-severity")).toHaveValue("Warning");
 });
 test("clear all notifications requires confirmation and supports cancellation", async ({ page }) => {
   await expect.poll(() => page.locator("#notification-list li").count()).toBeGreaterThan(0);
+  await expandNotifications(page);
   let count = await page.locator("#notification-list li").count();
   page.once("dialog", dialog => dialog.dismiss());
   await page.getByRole("button", { name: "Clear all" }).click();
@@ -66,6 +100,7 @@ test("clear all notifications requires confirmation and supports cancellation", 
 });
 test("notification filters include context, namespace, kind, and severity", async ({ page }) => {
   await expect.poll(() => page.locator("#notification-list li").count()).toBeGreaterThan(0);
+  await expandNotifications(page);
   const count = await page.locator("#notification-list li").count();
   const contextFilter = page.getByRole("searchbox", { name: "Filter notifications by context" });
   await contextFilter.fill("no-matching-context");
@@ -91,6 +126,7 @@ test("malformed notification storage is discarded without breaking the center", 
   await page.evaluate(storageKey => localStorage.setItem(storageKey, JSON.stringify({ items: [{ id: "bad", namespace: null, kind: 4 }], severities: ["Bogus"] })), key);
   await page.reload();
   await expect(page.getByRole("heading", { name: /Notifications/ })).toBeVisible();
+  await expandNotifications(page);
   await expect(page.locator("#notification-severity")).toHaveValue("all");
   await expect(page.locator("#notification-list li").first()).toContainText(/Warning|Normal/);
 });

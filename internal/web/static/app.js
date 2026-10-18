@@ -19,12 +19,15 @@ window.kui = (function () {
 	}
 
 	let logSocket = null;
+	let logBuffer = "";
 	let logAttempt = false;
 	let logBase = "";
 	let logPaused = false;
 	let logRetryTimer = null;
 	let logRetryAttempt = 0;
 	let logTrimmed = false;
+	let logBufferBaseLine = 0;
+	let logTotalLines = 0;
 	let logFilterInvalid = false;
 	let terminalSession = null;
 	let shellAttempt = false;
@@ -186,6 +189,7 @@ window.kui = (function () {
 		const pane = document.getElementById("logs-pane");
 		if (!pane) return;
 		logBuffer = "";
+		logBufferBaseLine = logTotalLines;
 		logTrimmed = false;
 		logFailed = false;
 		logPaused = false;
@@ -232,9 +236,12 @@ window.kui = (function () {
 			while (lines.length && (lines.length > maxLogLines || bytes > maxLogBytes)) {
 				if (lines.length === 1) lines = [];
 				else lines.shift();
+				logBufferBaseLine += 1;
 				logTrimmed = true;
 				bytes = new TextEncoder().encode(lines.join("\n")).length;
 			}
+			logBuffer = lines.join("\n");
+			logTotalLines = logBufferBaseLine + lines.filter((line, index) => line || index < lines.length - 1).length;
 			const status = document.getElementById("log-buffer-status");
 			if (status && logPaused) status.textContent =
 				(lines.filter((line, index) => line || index < lines.length - 1).length) +
@@ -312,6 +319,7 @@ window.kui = (function () {
 
 	function clearLogs() {
 		logBuffer = "";
+		logBufferBaseLine = logTotalLines;
 		logTrimmed = false;
 		renderLogBuffer();
 	}
@@ -330,8 +338,8 @@ window.kui = (function () {
 		session.ws.onerror = null;
 		session.ws.onclose = null;
 		session.ws.close();
-		session.term.dispose();
 		terminalSession = null;
+		window.kuiTerminalSession = null;
 		shellAttempt = false;
 		setStreamStatus("shell-status", "Disconnected");
 		const reconnect = document.getElementById("shell-reconnect");
@@ -359,7 +367,7 @@ window.kui = (function () {
 
 		const terminalColors = getComputedStyle(document.documentElement);
 		const term = new Terminal({
-			fontSize: 13,
+			fontSize: (() => { const saved = Number.parseInt(localStorage.getItem("kui.terminal-font-size") || "13", 10); return Number.isInteger(saved) ? Math.max(8, Math.min(28, saved)) : 13; })(),
 			theme: {
 				background: terminalColors.getPropertyValue("--surface-code").trim(),
 				foreground: terminalColors.getPropertyValue("--text-code").trim(),
@@ -388,6 +396,7 @@ window.kui = (function () {
 		}
 		const session = { term, ws, observer, resize };
 		terminalSession = session;
+		window.kuiTerminalSession = session;
 		const reconnect = document.getElementById("shell-reconnect");
 		if (reconnect) reconnect.disabled = true;
 		ws.onopen = () => {
@@ -653,6 +662,7 @@ window.kui = (function () {
 		hideAllSecrets();
 		disposeStreams();
 		logBuffer = "";
+		logBufferBaseLine = logTotalLines;
 		logTrimmed = false;
 		logFailed = false;
 		logBase = "";
@@ -2093,9 +2103,6 @@ window.kui = (function () {
 		}
 	}, true);
 	document.addEventListener("change", onTableChange);
-	document.addEventListener("input", (e) => {
-		if (e.target && e.target.id === "yaml-editor") updateYAMLDirtyState(e.target);
-	});
 	window.addEventListener("beforeunload", (e) => {
 		if (!hasUnsavedYAMLChanges()) return;
 		e.preventDefault();
@@ -2259,6 +2266,7 @@ window.kui = (function () {
 			setupDetailPane();
 			if (!target.querySelector("#tab-logs")) {
 				logBuffer = "";
+				logBufferBaseLine = logTotalLines;
 				logTrimmed = false;
 				logBase = "";
 				shellBase = "";
@@ -2268,7 +2276,7 @@ window.kui = (function () {
 		}
 
 		if (target.id === "yaml-result" && target.textContent.toLowerCase().includes("applied")) {
-			markYAMLEditorSaved();
+			if (!window.kui.markYAMLApplied?.()) markYAMLEditorSaved();
 		}
 
 		if (target.id === "content") {
@@ -2355,6 +2363,9 @@ window.kui = (function () {
 		changeResourcePageSize,
 		setRowDensity,
 		copyText,
+		syncYAMLDirtyState,
+		getLogBuffer: () => logBuffer,
+		getLogBufferInfo: () => ({ text: logBuffer, baseLine: logBufferBaseLine, totalLines: logTotalLines }),
 		downloadYAML,
 		downloadSelectedYAMLBundle,
 	};

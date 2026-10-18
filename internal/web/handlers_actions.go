@@ -245,16 +245,51 @@ func (s *Server) handlePortForwardStart(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	handle, err := s.forwards.Start(c, ns, name, localPort, remotePort, discardWriter{}, discardWriter{})
+	handle, err := s.forwards.Start(c, ctxName, ns, name, localPort, remotePort, discardWriter{}, discardWriter{})
 	if err != nil {
 		triggerToast(w, "error", err.Error())
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, `<span class="error-state">%s</span>`, template.HTMLEscapeString(err.Error()))
 		return
 	}
-	triggerToast(w, "success", fmt.Sprintf("forwarding localhost:%d to %s:%d", handle.LocalPort, name, handle.RemotePort))
-	fmt.Fprintf(w, `localhost:%d &rarr; %s:%d <button class="btn btn-danger" hx-delete="/portforward/%s" hx-swap="outerHTML" hx-target="closest div">Stop</button>`,
-		handle.LocalPort, name, handle.RemotePort, handle.ID)
+	w.Header().Set("HX-Trigger", `{"kui:forward-changed":true}`)
+	writePortForwardSession(w, k8s.ForwardSnapshot{ID: handle.ID, Context: ctxName, Namespace: ns, Pod: name, LocalPort: handle.LocalPort, RemotePort: handle.RemotePort})
+}
+
+func writePortForwardSession(w io.Writer, session k8s.ForwardSnapshot) {
+	endpoint := fmt.Sprintf("http://localhost:%d", session.LocalPort)
+	copyValue := fmt.Sprintf("%s -> %s/%s:%d", endpoint, session.Namespace, session.Pod, session.RemotePort)
+	fmt.Fprintf(w, `<div class="forward-session" data-forward-id="%s"><span role="status">Active: %s</span> <button type="button" class="btn" data-copy-text="%s" onclick="kui.copyText(this.dataset.copyText)">Copy endpoint</button> <button type="button" class="btn btn-danger" hx-delete="/portforward/%s" hx-swap="outerHTML" hx-target="closest .forward-session">Stop</button></div>`,
+		template.HTMLEscapeString(session.ID), template.HTMLEscapeString(copyValue), template.HTMLEscapeString(copyValue), template.HTMLEscapeString(session.ID))
+}
+
+func writePortForwardList(w io.Writer, sessions []k8s.ForwardSnapshot, contextID, namespace, pod string) {
+	if len(sessions) == 0 {
+		_, _ = io.WriteString(w, `<p class="text-dim" role="status">No active port-forward sessions</p>`)
+		return
+	}
+	matched := false
+	for _, session := range sessions {
+		if contextID != "" && session.Context != contextID || namespace != "" && session.Namespace != namespace || pod != "" && session.Pod != pod {
+			continue
+		}
+		matched = true
+		writePortForwardSession(w, session)
+	}
+	if !matched {
+		_, _ = io.WriteString(w, `<p class="text-dim" role="status">No active port-forward sessions for this resource</p>`)
+	}
+}
+
+func (s *Server) handlePortForwardList(w http.ResponseWriter, r *http.Request) {
+	contextID, namespace, pod := r.URL.Query().Get("context"), r.URL.Query().Get("namespace"), r.URL.Query().Get("pod")
+	if s.forwards == nil {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<p class="text-dim" role="status">Port-forward session manager unavailable</p>`))
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	writePortForwardList(w, s.forwards.Active(), contextID, namespace, pod)
 }
 
 type discardWriter struct{}
@@ -263,6 +298,7 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (s *Server) handlePortForwardStop(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	w.Header().Set("HX-Trigger", `{"kui:forward-changed":true}`)
 	// Stop reports false when the tunnel is already gone (it died on its own
 	// and was reaped, or was stopped before): say so instead of claiming a
 	// forward was stopped that no longer exists.

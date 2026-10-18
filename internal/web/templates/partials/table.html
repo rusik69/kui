@@ -49,14 +49,14 @@
     <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}">
     {{else}}
-    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"
+    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}"
         {{if $.HasMetrics}}data-metric-key="{{metricKey $row.Namespace $row.Name}}"{{end}}>
     {{end}}
       {{if $.Selectable}}<td class="select-col" onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="{{$row.DetailURL}}"></td>{{end}}
       {{if $.ShowNamespace}}<td>{{$row.Namespace}} <button type="button" class="copy-action" data-copy-text="{{$row.Namespace}}" aria-label="Copy namespace" title="Copy namespace" onclick="event.stopPropagation(); kui.copyText(this.dataset.copyText)"></button></td>{{end}}
       {{range $i, $cell := $row.Cells}}
-        <td class="{{cellClass $row.CellClasses $i}}">{{if eq $i 0}}{{if $row.DotClass}}<span class="dot {{$row.DotClass}}"></span>{{end}}{{end}}{{$cell}}{{if and (eq $i 0) (eq (index $.Columns 0) "Name")}} <button type="button" class="copy-action" data-copy-text="{{$row.Name}}" aria-label="Copy resource name" title="Copy resource name" onclick="event.stopPropagation(); kui.copyText(this.dataset.copyText)"></button>{{end}}</td>
+        <td class="{{cellClass $row.CellClasses $i}}">{{if eq $i 0}}{{range $k,$v := $row.Annotations}}<span hidden aria-hidden="true">{{$k}}={{$v}}</span>{{end}}{{if $row.DotClass}}<span class="dot {{$row.DotClass}}"></span>{{end}}{{end}}{{$cell}}{{if and (eq $i 0) (eq (index $.Columns 0) "Name")}} <button type="button" class="copy-action" data-copy-text="{{$row.Name}}" aria-label="Copy resource name" title="Copy resource name" onclick="event.stopPropagation(); kui.copyText(this.dataset.copyText)"></button>{{end}}</td>
       {{end}}
     </tr>
     {{end}}

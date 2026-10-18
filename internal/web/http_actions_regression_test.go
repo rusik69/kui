@@ -85,6 +85,32 @@ func TestPortForwardRejectsInvalidAndOversizedFormsBeforeClientLookup(t *testing
 		})
 	}
 }
+func TestPortForwardListFiltersScopeAndRendersCopyAndStopActions(t *testing.T) {
+	sessions := []k8s.ForwardSnapshot{
+		{ID: "first", Context: "ctx-a", Namespace: "dev", Pod: "alpha", LocalPort: 18080, RemotePort: 8080},
+		{ID: "other-context", Context: "ctx-b", Namespace: "dev", Pod: "alpha", LocalPort: 18081, RemotePort: 8080},
+		{ID: "other-pod", Context: "ctx-a", Namespace: "dev", Pod: "beta", LocalPort: 18082, RemotePort: 8080},
+	}
+
+	var body strings.Builder
+	writePortForwardList(&body, sessions, "ctx-a", "dev", "alpha")
+	html := body.String()
+	if !strings.Contains(html, `data-forward-id="first"`) ||
+		!strings.Contains(html, `data-copy-text="http://localhost:18080 -&gt; dev/alpha:8080"`) ||
+		!strings.Contains(html, `hx-delete="/portforward/first"`) {
+		t.Fatalf("scoped session missing status/copy/stop data: %s", html)
+	}
+	if strings.Contains(html, "other-context") || strings.Contains(html, "other-pod") {
+		t.Fatalf("session list leaked forwards outside requested scope: %s", html)
+	}
+
+	body.Reset()
+	writePortForwardList(&body, sessions, "missing", "dev", "alpha")
+	if got := body.String(); !strings.Contains(got, "No active port-forward sessions for this resource") ||
+		strings.Contains(got, `data-forward-id=`) {
+		t.Fatalf("empty scoped result = %s", got)
+	}
+}
 
 func TestMetricsScriptEscapesScriptContextCharacters(t *testing.T) {
 	rec := httptest.NewRecorder()

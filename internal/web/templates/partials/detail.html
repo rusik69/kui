@@ -1,17 +1,23 @@
 {{define "detail"}}
-<div class="detail-header" data-pod-identity="{{.Namespace}}/{{.Name}}">
+<div class="detail-header" data-pod-identity="{{.Namespace}}/{{.Name}}" data-detail-identity="{{.Context}}|{{.Namespace}}|{{.Resource}}|{{.Name}}|{{.UID}}" data-resource-kind="{{.Resource}}" data-context="{{.Context}}" data-namespace="{{.Namespace}}" data-resource-uid="{{.UID}}" data-secret="{{.IsSecret}}">
   <div class="detail-header-row">
     <div>{{if .DotClass}}<span class="dot {{.DotClass}}"></span>{{end}}<strong>{{.Name}}</strong></div>
     <div class="icon-actions">
-      <button type="button" class="icon-btn" title="Delete" aria-label="Delete {{.Kind}} {{.Name}}"
-              hx-delete="{{.DeleteURL}}" hx-confirm="Delete {{.Kind}} {{.Name}}?"
-              hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-trash"/></svg></button>
-      {{if .IsPod}}<button type="button" class="icon-btn" title="Evict" aria-label="Evict Pod {{.Name}}" hx-delete="{{.EvictURL}}" hx-confirm="Evict pod {{.Name}}?"
-              hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-eject"/></svg></button>{{end}}
+      <a class="btn" href="{{.CanonicalURL}}" target="_blank" rel="noopener" aria-label="Open canonical resource detail in new tab">Open detail in new tab</a>
+      <button type="button" class="btn" onclick="kui.toggleDetailSections(true)">Expand all sections</button>
+      <button type="button" class="btn" onclick="kui.toggleDetailSections(false)">Collapse all sections</button>
+      <button type="button" class="icon-btn" title="Delete" aria-label="Delete {{.Kind}} {{.Name}}" hx-delete="{{.DeleteURL}}" hx-confirm="Delete {{.Kind}} {{.Name}}?" hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-trash"/></svg></button>
+      {{if .IsPod}}<button type="button" class="icon-btn" title="Evict" aria-label="Evict Pod {{.Name}}" hx-delete="{{.EvictURL}}" hx-confirm="Evict pod {{.Name}}?" hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-eject"/></svg></button>{{end}}
       <button type="button" class="icon-btn" title="Close" aria-label="Close details" onclick="kui.closeDetail()"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
   </div>
   <div class="text-dim">{{.Kind}} &middot; {{.Namespace}} &middot; {{.Age}}</div>
+  <section class="resource-identity" aria-label="Resource identity">
+    <h3>Resource identity</h3>
+    <dl><dt>UID</dt><dd>{{.UID}}</dd><dt>API version</dt><dd>{{.APIVersion}}</dd><dt>Resource version</dt><dd>{{.ResourceVersion}}</dd></dl>
+    <button type="button" class="btn" onclick="kui.copyResourceIdentity()">Copy identity JSON</button>
+  </section>
+  {{if .Owners}}<section class="owner-references"><h3>Owner references</h3><ul>{{range .Owners}}<li><a href="{{.DetailURL}}" hx-get="{{.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML">{{.Kind}}/{{.Name}}</a></li>{{end}}</ul></section>{{end}}
   <div class="tab-row" role="tablist" aria-label="Resource details">
     <button type="button" id="tab-button-details" class="tab-btn active" role="tab" aria-controls="tab-details" aria-selected="true" tabindex="0" onclick="kui.showTab(this,'tab-details')">Details</button>
     <button type="button" id="tab-button-yaml" class="tab-btn" role="tab" aria-controls="tab-yaml" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-yaml')">YAML</button>
@@ -51,8 +57,8 @@
       <dt>Name</dt><dd>{{.Name}} <button type="button" class="copy-action" data-copy-text="{{.Name}}" aria-label="Copy name" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
       <dt>Namespace</dt><dd>{{.Namespace}} <button type="button" class="copy-action" data-copy-text="{{.Namespace}}" aria-label="Copy namespace" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
       <dt>Age</dt><dd>{{.Age}} <button type="button" class="copy-action" data-copy-text="{{.Age}}" aria-label="Copy age" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
-      <dt>Labels</dt><dd><div class="pill-row">{{range $k,$v := .Labels}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
-      <dt>Annotations</dt><dd><div class="pill-row">{{range $k,$v := .Annotations}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
+      <dt>Labels</dt><dd><div class="pill-row" data-metadata-kind="labels">{{range $k,$v := .Labels}}<button type="button" class="pill metadata-pill" data-key="{{$k}}" data-value="{{$v}}" title="{{$k}}={{$v}}" onclick="kui.applyMetadataPill(this)">{{$k}}<span class="pill-eq">=</span>{{$v}}</button>{{end}}</div><button type="button" class="btn" onclick="kui.copyMetadataJSON('labels')">Copy labels JSON</button></dd>
+      <dt>Annotations</dt><dd><div class="pill-row" data-metadata-kind="annotations">{{range $k,$v := .Annotations}}<button type="button" class="pill metadata-pill" data-key="{{$k}}" data-value="{{$v}}" title="{{$k}}={{$v}}" onclick="kui.applyMetadataPill(this)">{{$k}}<span class="pill-eq">=</span>{{$v}}</button>{{end}}</div><button type="button" class="btn" onclick="kui.copyMetadataJSON('annotations')">Copy annotations JSON</button></dd>
     </dl>
     <button type="button" class="btn" onclick="kui.hideAllSecrets()">Hide all secret values</button>
 
@@ -127,13 +133,20 @@
   <div id="tab-yaml" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-yaml" tabindex="0" style="display:none" hidden>
     <form hx-put="{{.YAMLDiffURL}}" hx-target="#yaml-diff-pane" hx-swap="innerHTML">
       <input type="hidden" name="original" value="{{.YAML}}">
-      <textarea id="yaml-editor" class="yaml-editor" name="yaml" spellcheck="false">{{.YAML}}</textarea>
+      <div class="yaml-workbench-tools">
+        <label>Find <input id="yaml-find" type="search"></label><label>Replace <input id="yaml-replace" type="text"></label>
+        <button type="button" class="btn" onclick="kui.findYAML(1)">Find next</button><button type="button" class="btn" onclick="kui.findYAML(-1)">Find previous</button><button type="button" class="btn" onclick="kui.replaceYAML()">Replace all</button>
+        <label>Indent <select id="yaml-indent"><option value="2">2 spaces</option><option value="4">4 spaces</option><option value="8">8 spaces</option></select></label><button type="button" class="btn" onclick="kui.indentYAML()">Indent selection</button>
+        <label><input id="yaml-wrap" type="checkbox"> Wrap lines</label>
+        <label>Revision <select id="yaml-revisions"><option value="">Current draft</option></select></label><button type="button" class="btn" onclick="kui.restoreYAMLRevision()">Restore revision</button>
+        <button type="button" class="btn" onclick="kui.discardYAMLDraft()">Discard local draft</button><button type="button" class="btn" onclick="kui.validateYAML()">Validate YAML</button>
+      </div>
+      <div class="yaml-editor-wrap"><pre id="yaml-line-numbers" aria-hidden="true">1</pre><textarea id="yaml-editor" class="yaml-editor" name="yaml" spellcheck="false" wrap="off">{{.YAML}}</textarea></div>
       <div class="toolbar" style="border:none;padding:8px 0">
         <button class="btn btn-primary" type="submit" disabled><svg class="icon"><use href="#icon-pencil"/></svg>Review changes</button>
         <button class="btn" type="button" onclick="kui.copyText(document.getElementById('yaml-editor').value)">Copy YAML</button>
         <button class="btn" type="button" data-filename="{{.Name}}.yaml" onclick="kui.downloadYAML(this.dataset.filename)">Download YAML</button>
-        <span id="yaml-dirty-status" class="text-dim" aria-live="polite">Saved</span>
-        <span id="yaml-result" aria-live="polite"></span>
+        <span id="yaml-dirty-status" class="text-dim" aria-live="polite">Saved</span><span id="yaml-result" aria-live="polite"></span>
       </div>
     </form>
     <div id="yaml-diff-pane"></div>
@@ -161,9 +174,9 @@
       <label>Since <select id="logs-since"><option value="">Any time</option><option value="3600">1 hour</option><option value="21600">6 hours</option><option value="86400">24 hours</option><option value="604800">7 days</option></select></label>
       <label><input type="checkbox" id="logs-wrap"> Wrap lines</label>
       <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Connect logs</button>
+      <button type="button" class="btn" id="log-pause" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
       <button id="log-reconnect" class="btn" onclick="kui.reconnectLogs()" disabled>Reconnect</button>
       <button type="button" id="log-retry-cancel" class="btn" onclick="kui.cancelLogReconnect()" hidden>Cancel retry</button>
-      <button id="log-pause" class="btn" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
       <button class="btn" onclick="kui.jumpToLatest()">Latest</button>
       <button class="btn" onclick="kui.copyFilteredLogs()">Copy filtered</button>
       <button class="btn" onclick="kui.downloadLogs()">Download raw</button>
@@ -171,36 +184,39 @@
       <button class="btn" onclick="kui.clearLogs()">Clear</button>
       <span id="log-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
       <span id="log-mode" class="text-dim" role="status"></span>
+      <button class="btn" type="button" onclick="kui.bookmarkCurrentLogLine()">Bookmark current line</button>
     </div>
     <label class="log-filter">Filter logs <input id="log-filter" type="search" oninput="kui.filterLogs()"></label>
     <label><input id="logs-regex" type="checkbox" onchange="kui.filterLogs()"> Regular expression</label>
     <label><input id="log-case-sensitive" type="checkbox" onchange="kui.filterLogs()"> Case-sensitive</label>
     <label><input id="log-follow" type="checkbox" checked onchange="kui.toggleFollow(this.checked)"> Follow logs</label>
-    <span id="log-buffer-status" class="text-dim" aria-live="off"></span>
-    <div id="logs-pane" class="log-pane" role="log" aria-live="off"></div>
+    <details class="log-highlights"><summary>Log highlights</summary><textarea id="log-highlight-patterns" aria-label="Literal highlight patterns" placeholder="One literal pattern per line"></textarea><button class="btn" type="button" onclick="kui.saveLogHighlights()">Apply highlights</button><button class="btn" type="button" onclick="kui.exportLogHighlights()">Export presets</button><label>Import presets <input id="log-highlight-import" type="file" accept="application/json" onchange="kui.importLogHighlights(this)"></label></details>
+    <label>Bookmark note <input id="log-bookmark-note" maxlength="500" aria-label="Note for next bookmark"></label><div id="log-bookmarks" aria-live="polite"></div>
+    <span id="log-buffer-status" class="text-dim" aria-live="polite"></span><span id="log-line-counts" role="status" aria-live="polite"></span>
+    <div id="logs-pane" class="log-pane" role="log" aria-live="off" tabindex="0"></div>
   </div>
 
   <div id="tab-shell" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-shell" tabindex="0" style="display:none" hidden>
     <div class="stream-controls">
       <label>Container <select id="shell-container" aria-label="Shell container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
-      <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
-      <button id="shell-reconnect" class="btn" onclick="kui.reconnectShell()" disabled>Reconnect</button>
-      <button class="btn" onclick="kui.copyTerminalSelection()">Copy selection</button>
-      <button class="btn" onclick="kui.clearTerminal()">Clear terminal</button>
-      <span id="shell-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
+      <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button><button id="shell-reconnect" class="btn" onclick="kui.reconnectShell()" disabled>Reconnect</button>
+      <button class="btn" onclick="kui.copyTerminalSelection()">Copy selection</button><button class="btn" onclick="kui.clearTerminal()">Clear terminal</button>
+      <button class="btn" onclick="kui.zoomTerminal(-1)" aria-label="Decrease terminal font size">A−</button><button class="btn" onclick="kui.zoomTerminal(1)" aria-label="Increase terminal font size">A+</button>
+      <button class="btn" onclick="kui.toggleTerminalFullscreen()" aria-pressed="false">Full screen terminal</button>
+      <span class="stream-status" id="shell-status" role="status" aria-live="polite">Disconnected</span>
     </div>
     <div id="term-pane" class="term-pane"></div>
   </div>
 
   <div id="tab-forward" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-forward" tabindex="0" style="display:none" hidden>
     <form hx-post="{{.PortForwardURL}}" hx-target="#forward-result" hx-swap="innerHTML">
-      <label>Local port <input type="number" name="localPort" required></label>
-      <label><input type="checkbox" onchange="kui.samePort(this)"> Same port</label>
-      <label>Remote port <input type="number" name="remotePort" required value="{{.DefaultRemotePort}}"></label>
-      <button class="btn btn-primary" type="submit">Start</button>
+      <label>Local port <input type="number" name="localPort" required></label><label><input type="checkbox" onchange="kui.samePort(this)"> Same port</label>
+      <label>Remote port <input type="number" name="remotePort" required value="{{.DefaultRemotePort}}"></label><button class="btn btn-primary" type="submit">Start</button>
     </form>
     <div id="forward-result"></div>
+    <section class="active-forwards" aria-labelledby="active-forwards-title"><h3 id="active-forwards-title">Active port forwards</h3><div hx-get="/portforward?context={{.Context}}&amp;namespace={{.Namespace}}&amp;pod={{.Name}}" hx-trigger="load, every 5s, kui:forward-changed from:body" hx-swap="innerHTML"><span role="status">Loading active sessions…</span></div></section>
   </div>
+
   {{end}}
 
   {{if .IsDeployment}}

@@ -248,7 +248,15 @@ function requestResource(pathname) {
 
 export async function startFakeKubernetes() {
   const objects = initialObjects();
-  const controls = { failNextLog: false, closeNextWatch: false };
+  const logStreams = new Set();
+  const controls = {
+    failNextLog: false,
+    closeNextWatch: false,
+    logText: "2024-02-03T04:05:06Z alpha started\nsecond deterministic log line\n",
+    appendLog(text) {
+      for (const response of logStreams) response.write(text);
+    },
+  };
   const requests = [];
   const watches = { started: 0, closed: 0 };
   const server = createServer(async (request, response) => {
@@ -326,7 +334,9 @@ export async function startFakeKubernetes() {
         return sendJSON(response, 500, statusObject(500, "InternalError", "deterministic log stream failure"));
       }
       response.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" });
-      response.write("2024-02-03T04:05:06Z alpha started\nsecond deterministic log line\n");
+      response.write(controls.logText);
+      logStreams.add(response);
+      response.on("close", () => logStreams.delete(response));
       return;
     }
 

@@ -9,13 +9,13 @@ import (
 
 func TestForwardManagerStopAllClosesAndRemovesEveryHandle(t *testing.T) {
 	manager := NewForwardManager()
-	first := &ForwardHandle{ID: "pf-1", Namespace: "ns", Pod: "a", LocalPort: 8080, RemotePort: 80, stopCh: make(chan struct{})}
-	second := &ForwardHandle{ID: "pf-2", Namespace: "ns", Pod: "b", LocalPort: 8081, RemotePort: 81, stopCh: make(chan struct{})}
+	first := &ForwardHandle{ID: "pf-1", Context: "ctx-a", Namespace: "ns", Pod: "a", LocalPort: 8080, RemotePort: 80, stopCh: make(chan struct{})}
+	second := &ForwardHandle{ID: "pf-2", Context: "ctx-b", Namespace: "ns", Pod: "b", LocalPort: 8081, RemotePort: 81, stopCh: make(chan struct{})}
 	manager.live[first.ID] = first
 	manager.live[second.ID] = second
 
 	snapshot := manager.Active()
-	if len(snapshot) != 2 || snapshot[0].ID != first.ID || snapshot[0].LocalPort != first.LocalPort || snapshot[1].ID != second.ID {
+	if len(snapshot) != 2 || snapshot[0].ID != first.ID || snapshot[0].Context != "ctx-a" || snapshot[0].LocalPort != first.LocalPort || snapshot[1].ID != second.ID || snapshot[1].Context != "ctx-b" {
 		t.Fatalf("Active() = %+v, want stable snapshot of both forwards", snapshot)
 	}
 

@@ -14,6 +14,252 @@
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const liveState = { scope: null, table: null, defaultLayout: [], layoutDraft: [], layoutBeforeEdit: null, layoutOpen: false, activeView: "", comparison: [], comparisonData: [], comparisonSequence: 0, comparisonFetchedAt: 0, comparisonScope: null, pendingViewState: null, requestRollback: null, comparisonController: null };
   let resizeState = null;
+  const explorerState = { pane: null, table: null, sorts: [], filters: new Map(), selectedOnly: false, pins: new Set() };
+
+  function explorerScope() {
+    return liveState.scope ? `${liveState.scope.context}:${liveState.scope.namespace}:${liveState.scope.resourceKind}` : "unknown";
+  }
+
+  function explorerPinKey() {
+    return `kui.table-pins.v1:${encodeURIComponent(explorerScope())}`;
+  }
+
+  function loadPins() {
+    try {
+      const stored = JSON.parse(localStorage.getItem(explorerPinKey()) || "[]");
+      explorerState.pins = new Set(Array.isArray(stored) ? stored.filter((id) => typeof id === "string").slice(0, 10000) : []);
+    } catch { explorerState.pins = new Set(); }
+  }
+
+  function persistPins() {
+    try { localStorage.setItem(explorerPinKey(), JSON.stringify(Array.from(explorerState.pins))); } catch { explorerMessage("Pins could not be saved in local storage.", true); }
+  }
+
+  function explorerMessage(text, error = false) {
+    const node = $("#kui-explorer-status", explorerState.pane || document);
+    if (node) { node.textContent = text; node.classList.toggle("is-error", error); }
+  }
+
+  function ensureExplorerControls(table) {
+    const pane = table.closest(".list-pane");
+    if (!pane) return;
+    let controls = $(".kui-table-explorer", pane);
+    if (!controls) {
+      controls = document.createElement("section");
+      controls.className = "kui-table-explorer";
+      controls.setAttribute("aria-label", "Table exploration");
+      controls.innerHTML = `<div class="kui-explorer-tools">
+        <label><input type="checkbox" data-explorer="case"> Case-sensitive</label>
+        <label><input type="checkbox" data-explorer="regex"> Regular expression</label>
+        <label><input type="checkbox" data-explorer="selected"> Selected rows only</label>
+        <button type="button" class="btn" data-explorer="clear-sorts">Clear sort keys</button>
+        <button type="button" class="btn" data-explorer="export-json">Export selected JSON</button>
+        <button type="button" class="btn" data-explorer="copy-tsv">Copy selected TSV</button>
+        <span class="kui-explorer-counts" aria-live="polite"></span>
+      </div>
+      <div class="kui-explorer-columns" aria-label="Per-column filters"></div>
+      <ol class="kui-sort-priority" aria-label="Sort priority"></ol>
+      <p id="kui-explorer-status" class="kui-explorer-status" role="status" aria-live="polite"></p>`;
+      const workbench = $(".kui-workbench", pane);
+      (workbench || table.closest(".resource-table-wrap") || table).before(controls);
+    }
+    explorerState.pane = pane;
+    explorerState.table = table;
+    const params = new URLSearchParams(location.search);
+    if (params.has("kuiColumnFilters")) {
+      try {
+        const parsed = JSON.parse(params.get("kuiColumnFilters"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) explorerState.filters = new Map(Object.entries(parsed).filter(([, value]) => typeof value === "string").slice(0, 100));
+      } catch { explorerState.filters.clear(); }
+    }
+    explorerState.selectedOnly = params.get("kuiSelectedOnly") === "1";
+    const filter = $("#row-filter", pane)?.value || params.get("rowFilter") || "";
+    const tableFilter = $("#row-filter", pane);
+    if (tableFilter) tableFilter.value = filter;
+    const modeCase = params.get("rowFilterCase") === "1";
+    const modeRegex = params.get("rowFilterRegex") === "1";
+    controls.querySelector('[data-explorer="case"]').checked = modeCase;
+    controls.querySelector('[data-explorer="regex"]').checked = modeRegex;
+    controls.querySelector('[data-explorer="selected"]').checked = explorerState.selectedOnly;
+    const headers = Array.from(table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+    const columns = $(".kui-explorer-columns", controls);
+    if (!columns.childElementCount || columns.dataset.signature !== headers.map((th) => th.textContent.trim()).join("\u0000")) {
+      columns.dataset.signature = headers.map((th) => th.textContent.trim()).join("\u0000");
+      columns.replaceChildren();
+      headers.forEach((th) => {
+        const label = th.dataset.kuiLabel || th.textContent.trim();
+        const field = document.createElement("label");
+        field.textContent = `${label} filter `;
+        const input = document.createElement("input");
+        input.type = "search"; input.dataset.columnFilter = label; input.setAttribute("aria-label", `${label} column filter`);
+        input.value = explorerState.filters.get(label) || "";
+        field.appendChild(input); columns.appendChild(field);
+      });
+    }
+    if (params.has("kuiSort")) {
+      try {
+        const parsed = JSON.parse(params.get("kuiSort"));
+        if (Array.isArray(parsed) && parsed.every((item) => item && typeof item.key === "string" && ["asc", "desc"].includes(item.direction))) explorerState.sorts = parsed;
+      } catch { explorerState.sorts = []; }
+    } else if (pane.dataset.sortKey) explorerState.sorts = [{ key: pane.dataset.sortKey, direction: pane.dataset.sortDir === "desc" ? "desc" : "asc" }];
+    loadPins();
+    applyExplorer(table, filter, modeCase, modeRegex);
+  }
+
+  function normalizedCell(cell) {
+    const copy = cell.cloneNode(true);
+    copy.querySelectorAll("button,input,svg,.sr-only,[aria-hidden='true'],[hidden]").forEach((node) => node.remove());
+    return copy.textContent.trim();
+  }
+
+  function selectedRow(row) {
+    const checkbox = row.querySelector(".row-select");
+    return !!checkbox?.checked || row.classList.contains("selected");
+  }
+
+  function dataCells(row) {
+    return Array.from(row.cells).filter((cell) => !cell.classList.contains("select-col"));
+  }
+
+  function applyExplorer(table = explorerState.table, rawFilter = $("#row-filter", explorerState.pane)?.value || "", caseSensitive = $('[data-explorer="case"]', explorerState.pane)?.checked, regexMode = $('[data-explorer="regex"]', explorerState.pane)?.checked) {
+    if (!table) return;
+    const headers = Array.from(table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+    const needle = caseSensitive ? rawFilter : rawFilter.toLocaleLowerCase();
+    let pattern = null, invalid = false;
+    if (regexMode && rawFilter) { try { pattern = new RegExp(rawFilter, caseSensitive ? "" : "i"); } catch { invalid = true; } }
+    const rows = Array.from(table.querySelectorAll("tbody tr[data-id]"));
+    const sorted = explorerState.sorts.filter((item) => headers.some((th) => (th.dataset.kuiLabel || th.textContent.trim()) === item.key));
+    rows.forEach((row) => {
+      row.dataset.kuiOriginalOrder ||= String(rows.indexOf(row));
+    });
+    rows.sort((a, b) => {
+      for (const spec of sorted) {
+        const index = headers.findIndex((th) => (th.dataset.kuiLabel || th.textContent.trim()) === spec.key);
+        const av = parseSortValue(normalizedCell(dataCells(a)[index])), bv = parseSortValue(normalizedCell(dataCells(b)[index]));
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        if (cmp) return spec.direction === "desc" ? -cmp : cmp;
+      }
+      return Number(a.dataset.kuiOriginalOrder) - Number(b.dataset.kuiOriginalOrder);
+    });
+    rows.forEach((row) => table.querySelector("tbody").appendChild(row));
+    if (sorted.length) {
+      explorerState.pane.dataset.sortKey = sorted[0].key;
+      explorerState.pane.dataset.sortDir = sorted[0].direction;
+    } else {
+      explorerState.pane.dataset.sortKey = "";
+      explorerState.pane.dataset.sortDir = "asc";
+    }
+    let matching = 0, visible = 0, selected = 0;
+    rows.forEach((row) => {
+      const isSelected = selectedRow(row);
+      if (isSelected) selected++;
+      const cells = Array.from(row.cells).filter((cell) => !cell.classList.contains("select-col"));
+      const globalText = ($("#column-filter")?.value ? normalizedCell(cells[headers.findIndex((th) => th.textContent.trim() === $("#column-filter").value)] || row) : cells.map(normalizedCell).join(" "));
+      const compared = caseSensitive ? globalText : globalText.toLocaleLowerCase();
+      const globalMatch = !rawFilter || invalid || (regexMode ? !!pattern?.test(globalText) : compared.includes(needle));
+      const perColumnMatch = Array.from(explorerState.filters.entries()).every(([label, value]) => {
+        if (!value) return true;
+        const idx = headers.findIndex((th) => (th.dataset.kuiLabel || th.textContent.trim()) === label);
+        const text = normalizedCell(cells[idx] || document.createElement("td"));
+        return (caseSensitive ? text : text.toLocaleLowerCase()).includes(caseSensitive ? value : value.toLocaleLowerCase());
+      });
+      const matches = globalMatch && perColumnMatch;
+      if (matches) matching++;
+      const show = matches && (!explorerState.selectedOnly || isSelected);
+      row.style.display = show ? "" : "none";
+      row.classList.toggle("kui-pinned-row", explorerState.pins.has(row.dataset.id));
+      let pin = row.querySelector(".kui-row-pin");
+      if (!pin) {
+        pin = document.createElement("button"); pin.type = "button"; pin.className = "kui-row-pin"; pin.dataset.explorer = "pin";
+        row.cells[0]?.appendChild(pin);
+      }
+      const pinned = explorerState.pins.has(row.dataset.id);
+      pin.textContent = pinned ? "Unpin" : "Pin";
+      pin.setAttribute("aria-label", `${pinned ? "Unpin" : "Pin"} ${row.dataset.name || "resource"}`);
+      pin.setAttribute("aria-pressed", String(pinned));
+      if (show) visible++;
+    });
+    const empty = table.querySelector("[data-filter-empty]");
+    if (empty) empty.style.display = rows.length && matching === 0 ? "" : "none";
+    const status = $(".kui-explorer-counts", explorerState.pane);
+    if (status) status.textContent = `${matching} matching · ${visible} visible · ${selected} selected`;
+    if (invalid) explorerMessage("Invalid regular expression; all rows remain eligible. Correct the pattern to filter.", true);
+    else explorerMessage("");
+    renderSortPriority();
+    syncExplorerURL(rawFilter, caseSensitive, regexMode);
+  }
+
+  function parseSortValue(text) {
+    const value = text.trim();
+    const numeric = value.match(/^-?\d+(?:\.\d+)?$/);
+    return numeric ? Number(value) : value.toLocaleLowerCase();
+  }
+
+  function renderSortPriority() {
+    const list = $(".kui-sort-priority", explorerState.pane);
+    if (!list) return;
+    list.replaceChildren();
+    explorerState.sorts.forEach((spec, index) => {
+      const item = document.createElement("li");
+      const text = document.createElement("span");
+      text.textContent = `${index + 1}. ${spec.key}, ${spec.direction === "asc" ? "ascending" : "descending"}`;
+      const remove = document.createElement("button");
+      remove.type = "button"; remove.className = "btn"; remove.dataset.explorer = "remove-sort"; remove.dataset.sortIndex = String(index);
+      remove.textContent = "Remove"; remove.setAttribute("aria-label", `Remove sort priority ${index + 1}: ${spec.key}`);
+      item.append(text, remove); list.appendChild(item);
+    });
+    const headers = Array.from(explorerState.table?.querySelectorAll("thead th:not(.select-col)") || []);
+    headers.forEach((header) => {
+      const label = header.dataset.kuiLabel || header.textContent.trim();
+      const index = explorerState.sorts.findIndex((item) => item.key === label);
+      header.setAttribute("aria-sort", index < 0 ? "none" : explorerState.sorts[index].direction === "asc" ? "ascending" : "descending");
+      header.setAttribute("aria-label", `${label}${index < 0 ? "" : `, sort priority ${index + 1}, ${explorerState.sorts[index].direction === "asc" ? "ascending" : "descending"}`}. Press Enter to sort; Shift+Enter to add or change a priority.`);
+    });
+  }
+
+  function syncExplorerURL(filter, caseSensitive, regexMode) {
+    const url = new URL(location.href);
+    if (filter) url.searchParams.set("rowFilter", filter); else url.searchParams.delete("rowFilter");
+    if (caseSensitive) url.searchParams.set("rowFilterCase", "1"); else url.searchParams.delete("rowFilterCase");
+    if (regexMode) url.searchParams.set("rowFilterRegex", "1"); else url.searchParams.delete("rowFilterRegex");
+    if (explorerState.sorts.length) url.searchParams.set("kuiSort", JSON.stringify(explorerState.sorts));
+    else url.searchParams.delete("kuiSort");
+    const columnFilters = Object.fromEntries(Array.from(explorerState.filters).filter(([, value]) => value));
+    if (Object.keys(columnFilters).length) url.searchParams.set("kuiColumnFilters", JSON.stringify(columnFilters));
+    else url.searchParams.delete("kuiColumnFilters");
+    if (explorerState.selectedOnly) url.searchParams.set("kuiSelectedOnly", "1");
+    else url.searchParams.delete("kuiSelectedOnly");
+    history.replaceState(history.state, "", url.pathname + url.search);
+  }
+
+  function exportSelectedJSON() {
+    const table = explorerState.table;
+    const selected = Array.from(table?.querySelectorAll("tbody tr[data-id]") || []).filter(selectedRow);
+    if (!selected.length) { explorerMessage("Select at least one row to export.", true); return; }
+    const headers = Array.from(table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+    const data = selected.map((row) => {
+      const values = {};
+      headers.forEach((header, index) => { values[header.dataset.kuiLabel || header.textContent.trim()] = normalizedCell(dataCells(row)[index]); });
+      return { id: row.dataset.id, namespace: values.Namespace || $("#namespace-select")?.value || "", ...values, Name: row.dataset.name || values.Name || "" };
+    });
+    downloadFile("selected-resources.json", JSON.stringify(data, null, 2), "application/json;charset=utf-8");
+    explorerMessage(`Exported ${data.length} selected row${data.length === 1 ? "" : "s"} as JSON.`);
+  }
+
+  async function copySelectedTSV() {
+    const table = explorerState.table;
+    const selected = Array.from(table?.querySelectorAll("tbody tr[data-id]") || []).filter(selectedRow);
+    if (!selected.length) { explorerMessage("Select at least one row to copy.", true); return; }
+    const headers = Array.from(table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+    const quote = (value) => `"${String(value).replace(/"/g, '""')}"`;
+    const lines = [headers.map((header) => quote(header.dataset.kuiLabel || header.textContent.trim())).join("\t")];
+    selected.forEach((row) => lines.push(headers.map((_, index) => quote(normalizedCell(dataCells(row)[index]))).join("\t")));
+    const text = lines.join("\r\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      explorerMessage(`Copied ${selected.length} selected row${selected.length === 1 ? "" : "s"} as TSV.`);
+    } catch { explorerMessage("Clipboard access was denied; selected TSV was not copied.", true); }
+  }
 
   function scopeFor(table) {
     const route = location.pathname.split("/").filter(Boolean);
@@ -217,9 +463,11 @@
       liveState.layoutDraft = normalizeLayout(liveState.pendingViewState.layout, liveState.defaultLayout);
       liveState.pendingViewState = null;
     }
-    applyLayout(liveState.layoutDraft, table);
-    renderColumnChooser(root);
+    ensureExplorerControls(table);
     renderViewControls(root);
+    applyLayout(liveState.layoutDraft, table);
+    applyExplorer(table);
+    renderColumnChooser(root);
     syncRowFilterMirror();
     updateViewDirtyLabel();
     const layoutPanel = $("#table-view-panel", root);
@@ -603,14 +851,14 @@
     if (topFilter) topFilter.value = state.filters.text;
     const column = $("#column-filter", pane);
     if (column) column.value = Array.from(column.options).some((option) => option.value === state.filters.column) ? state.filters.column : "";
-    pane.dataset.sortKey = liveState.defaultLayout.some((item) => item.label === state.sort.key) ? state.sort.key : "";
+    explorerState.sorts = pane.dataset.sortKey ? [{ key: pane.dataset.sortKey, direction: state.sort.direction }] : [];
     liveState.pendingViewState = state;
     setLayout(state.layout, false);
     document.body.dataset.rowDensity = state.density;
     const densityControl = $("#row-density", pane);
     if (densityControl) densityControl.value = state.density;
     const baseURL = new URL(pane.dataset.listUrl || location.href, location.origin);
-    ["frame", "continue", "labelSelector", "fieldSelector", "limit", "rowFilter", "columnFilter", "sortColumn", "sortDir"].forEach((key) => baseURL.searchParams.delete(key));
+    ["frame", "continue", "labelSelector", "fieldSelector", "limit", "rowFilter", "columnFilter", "sortColumn", "sortDir", "kuiSort"].forEach((key) => baseURL.searchParams.delete(key));
     if (state.selectors.label) baseURL.searchParams.set("labelSelector", state.selectors.label);
     if (state.selectors.field) baseURL.searchParams.set("fieldSelector", state.selectors.field);
     baseURL.searchParams.set("limit", String(state.pageSize));
@@ -620,6 +868,7 @@
       baseURL.searchParams.set("sortColumn", pane.dataset.sortKey);
       baseURL.searchParams.set("sortDir", state.sort.direction);
     }
+    if (explorerState.sorts.length) baseURL.searchParams.set("kuiSort", JSON.stringify(explorerState.sorts));
     const pageURL = new URL(baseURL);
     baseURL.searchParams.set("frame", "table");
     pane.dataset.pageHistory = "[]";
@@ -1400,6 +1649,33 @@
   function handleDocumentEvent(event) {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (event.type === "input" && target.matches("#row-filter, .kui-explorer-columns input")) {
+      if (target.matches(".kui-explorer-columns input")) explorerState.filters.set(target.dataset.columnFilter, target.value);
+      applyExplorer(explorerState.table, target.matches("#row-filter") ? target.value : undefined);
+    }
+    if (event.type === "change" && target.matches(".kui-explorer-tools input")) {
+      if (target.dataset.explorer === "selected") explorerState.selectedOnly = target.checked;
+      applyExplorer(explorerState.table);
+    }
+    if (event.type === "click" && target.matches("[data-explorer]")) {
+      const action = target.dataset.explorer;
+      if (action === "pin") {
+        event.preventDefault();
+        event.stopPropagation();
+        const row = target.closest("tr[data-id]");
+        if (row) {
+          if (explorerState.pins.has(row.dataset.id)) explorerState.pins.delete(row.dataset.id);
+          else explorerState.pins.add(row.dataset.id);
+          persistPins(); applyExplorer();
+        }
+      } else if (action === "remove-sort") {
+        explorerState.sorts.splice(Number(target.dataset.sortIndex), 1); applyExplorer(); explorerMessage(`Sort priority removed. ${explorerState.sorts.length} active sort key${explorerState.sorts.length === 1 ? "" : "s"}.`);
+      } else if (action === "clear-sorts") {
+        explorerState.sorts = []; applyExplorer(); explorerMessage("All sort priorities cleared.");
+      } else if (action === "export-json") exportSelectedJSON();
+      else if (action === "copy-tsv") void copySelectedTSV();
+      return;
+    }
     if (event.type === "input" || event.type === "change") {
       if (target.matches("#row-filter")) {
         syncRowFilterMirror(target);
@@ -1530,7 +1806,50 @@
     resizeState = null;
   }
 
+  function sortFromHeader(header, addPriority) {
+    const key = header.dataset.kuiLabel || header.textContent.trim();
+    if (!key) return;
+    const existing = explorerState.sorts.find((item) => item.key === key);
+    if (addPriority) {
+      if (existing) existing.direction = existing.direction === "asc" ? "desc" : "asc";
+      else explorerState.sorts.push({ key, direction: "asc" });
+    } else if (existing && explorerState.sorts[0] === existing) existing.direction = existing.direction === "asc" ? "desc" : "asc";
+    else {
+      const direction = existing?.direction || "asc";
+      explorerState.sorts = [{ key, direction }, ...explorerState.sorts.filter((item) => item.key !== key)];
+    }
+    const headers = Array.from(explorerState.table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+    headers.forEach((th) => {
+      const i = explorerState.sorts.findIndex((item) => item.key === (th.dataset.kuiLabel || th.textContent.trim()));
+      th.setAttribute("aria-sort", i < 0 ? "none" : explorerState.sorts[i].direction === "asc" ? "ascending" : "descending");
+      th.setAttribute("aria-label", `${th.dataset.kuiLabel || th.textContent.trim()}${i < 0 ? "" : `, sort priority ${i + 1}, ${explorerState.sorts[i].direction}`}. Press Enter to sort; Shift+Enter to add or change a priority.`);
+    });
+    applyExplorer();
+    explorerMessage(`Sort priority updated: ${explorerState.sorts.map((item, index) => `${index + 1} ${item.key} ${item.direction}`).join(", ") || "none"}.`);
+  }
+
+  function initExplorerEvents() {
+    document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const header = event.target.closest("#kui-table thead th[tabindex='0']");
+      if (!header || event.target.closest("button,input")) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      sortFromHeader(header, event.shiftKey);
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const header = event.target.closest("#kui-table thead th[tabindex='0']");
+      if (!header || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      sortFromHeader(header, event.shiftKey);
+    }, true);
+    document.addEventListener("change", (event) => {
+      if (event.target instanceof Element && event.target.matches(".row-select, #select-all-rows")) setTimeout(() => applyExplorer(), 0);
+    });
+  }
+
   function init() {
+    initExplorerEvents();
     document.addEventListener("htmx:afterSwap", (event) => {
       const target = event.detail?.target;
       if (target?.classList?.contains("list-pane")) {
@@ -1556,12 +1875,44 @@
     };
     ["htmx:responseError", "htmx:sendError", "htmx:timeout"].forEach((type) => document.addEventListener(type, handleListRequestError));
     document.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element)) return;
+      const pin = event.target.closest('[data-explorer="pin"]');
+      if (!pin) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const row = pin.closest("tr[data-id]");
+      if (!row) return;
+      if (explorerState.pins.has(row.dataset.id)) explorerState.pins.delete(row.dataset.id);
+      else explorerState.pins.add(row.dataset.id);
+      persistPins();
+      applyExplorer();
+    }, true);
+    document.addEventListener("click", (event) => {
       if (event.target instanceof Element && event.target.closest(".kui-column-resize")) {
         event.preventDefault();
         event.stopPropagation();
       }
     }, true);
     ["click", "input", "change", "keydown", "dragstart", "dragend", "dragover", "drop"].forEach((type) => document.addEventListener(type, handleDocumentEvent));
+    document.addEventListener("popstate", () => {
+      const params = new URLSearchParams(location.search);
+      const caseControl = $('[data-explorer="case"]', explorerState.pane);
+      const regexControl = $('[data-explorer="regex"]', explorerState.pane);
+      const selectedControl = $('[data-explorer="selected"]', explorerState.pane);
+      if (caseControl) caseControl.checked = params.get("rowFilterCase") === "1";
+      if (regexControl) regexControl.checked = params.get("rowFilterRegex") === "1";
+      if (selectedControl) selectedControl.checked = params.get("kuiSelectedOnly") === "1";
+      explorerState.selectedOnly = params.get("kuiSelectedOnly") === "1";
+      try { explorerState.sorts = JSON.parse(params.get("kuiSort") || "[]"); } catch { explorerState.sorts = []; }
+      try {
+        const filters = JSON.parse(params.get("kuiColumnFilters") || "{}");
+        explorerState.filters = new Map(Object.entries(filters).filter(([, value]) => typeof value === "string"));
+      } catch { explorerState.filters.clear(); }
+      const input = $("#row-filter");
+      if (input) input.value = params.get("rowFilter") || "";
+      $$(".kui-explorer-columns input", explorerState.pane).forEach((control) => { control.value = explorerState.filters.get(control.dataset.columnFilter) || ""; });
+      applyExplorer(explorerState.table, input?.value || "", caseControl?.checked, regexControl?.checked);
+    });
     document.addEventListener("pointerdown", pointerResizeStart, true);
     document.addEventListener("pointermove", pointerResizeMove, true);
     document.addEventListener("pointerup", pointerResizeEnd, true);

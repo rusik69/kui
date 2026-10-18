@@ -4,6 +4,41 @@
 
   const storageKey = "kui.searchDestinations.v1";
   const limit = 20;
+  const historyKey = "kui.searchQueryHistory.v1";
+  const savedKey = "kui.savedSearchQueries.v1";
+  const libraryScope = () => {
+    const path = location.pathname.split("/");
+    const namespace = new URL(location.href).searchParams.get("ns") || document.querySelector(".search-workbench")?.dataset.searchNamespace || (path[3] ? decodeURIComponent(path[3]) : "_all");
+    return { context: decodeURIComponent(path[2] || ""), namespace };
+  };
+  const rawLibrary = (key) => { try { const data = JSON.parse(localStorage.getItem(key) || "[]"); return Array.isArray(data) ? data : []; } catch { return []; } };
+  const scopedLibrary = (key) => {
+    const scope = libraryScope();
+    return rawLibrary(key).filter((item) => item && item.context === scope.context && item.namespace === scope.namespace && typeof item.query === "string" && item.query.length <= 500 && typeof item.name === "string").slice(0, limit);
+  };
+  const replaceScoped = (key, entries) => {
+    const scope = libraryScope();
+    const other = rawLibrary(key).filter((item) => item && (item.context !== scope.context || item.namespace !== scope.namespace));
+    try { localStorage.setItem(key, JSON.stringify([...entries.slice(0, limit), ...other].slice(0, limit * 20))); } catch {}
+  };
+  const saveHistory = (query) => {
+    query = query.trim();
+    if (!query || query.length > 500) return;
+    const scope = libraryScope();
+    let entries = scopedLibrary(historyKey).filter((entry) => entry.query !== query);
+    entries.unshift({ query, name: query, ...scope, at: Date.now() });
+    replaceScoped(historyKey, entries);
+    decorate();
+  };
+  const saveQuery = (name, query) => {
+    const scope = libraryScope();
+    const entries = scopedLibrary(savedKey);
+    if (entries.some((entry) => entry.name === name)) return false;
+    entries.unshift({ name, query, ...scope });
+    replaceScoped(savedKey, entries);
+    return true;
+  };
+  const refreshLibrary = () => decorate();
   let shortcutOpener = null;
   const palette = () => document.getElementById("palette-results");
   const workbench = () => palette()?.querySelector(".search-workbench");
@@ -62,6 +97,14 @@
         item.appendChild(pin);
       }
     });
+    const queryList = root.querySelector("[data-query-library]");
+    if (queryList) {
+      queryList.replaceChildren();
+      for (const entry of [...scopedLibrary(savedKey), ...scopedLibrary(historyKey).slice(0, 8)]) {
+        const button = document.createElement("button"); button.type = "button"; button.dataset.restoreQuery = entry.query; button.textContent = entry.name; queryList.appendChild(button);
+        if (scopedLibrary(savedKey).some((saved) => saved.name === entry.name && saved.query === entry.query)) { const rename = document.createElement("button"); rename.type = "button"; rename.dataset.renameQuery = entry.name; rename.textContent = "Rename"; rename.setAttribute("aria-label", `Rename ${entry.name}`); queryList.appendChild(rename); const remove = document.createElement("button"); remove.type = "button"; remove.dataset.deleteQuery = entry.name; remove.textContent = "Delete"; remove.setAttribute("aria-label", `Delete ${entry.name}`); queryList.appendChild(remove); }
+      }
+    }
     const select = root.querySelector("[data-search-kind-filter]");
     if (select) {
       const kinds = new Set();
@@ -112,10 +155,51 @@
       });
       root.appendChild(group);
     }
+    const suggestions = document.createElement("div");
+    suggestions.className = "search-suggestions";
+    suggestions.setAttribute("role", "group");
+    suggestions.setAttribute("aria-label", "Search qualifier suggestions");
+    for (const query of ["kind:Pod", "status:Running", "label:app=web", "field:metadata.name=web", "name:=web"]) {
+      const button = document.createElement("button"); button.type = "button"; button.dataset.suggestQuery = query; button.textContent = query; suggestions.appendChild(button);
+    }
+    root.appendChild(suggestions);
+    const library = document.createElement("section");
+    library.className = "search-query-library";
+    library.setAttribute("aria-label", "Search query library");
+    const title = document.createElement("strong"); title.textContent = "Saved queries"; library.appendChild(title);
+    scopedLibrary(savedKey).forEach((entry) => {
+      const row = document.createElement("div"); row.className = "search-query-entry";
+      const restore = document.createElement("button"); restore.type = "button"; restore.dataset.restoreQuery = entry.query; restore.textContent = entry.name; row.appendChild(restore);
+      const rename = document.createElement("button"); rename.type = "button"; rename.dataset.renameQuery = entry.name; rename.dataset.query = entry.query; rename.textContent = "Rename"; rename.setAttribute("aria-label", `Rename ${entry.name}`); row.appendChild(rename);
+      const remove = document.createElement("button"); remove.type = "button"; remove.dataset.deleteQuery = entry.name; remove.textContent = "Delete"; remove.setAttribute("aria-label", `Delete ${entry.name}`); row.appendChild(remove);
+      library.appendChild(row);
+    });
+    const historyTitle = document.createElement("strong"); historyTitle.textContent = "Recent queries"; library.appendChild(historyTitle);
+    scopedLibrary(historyKey).slice(0, 8).forEach((entry) => { const button = document.createElement("button"); button.type = "button"; button.className = "search-query-history"; button.dataset.restoreQuery = entry.query; button.textContent = entry.query; library.appendChild(button); });
+    const saveForm = document.createElement("form"); saveForm.dataset.saveQueryForm = "";
+    const name = document.createElement("input"); name.name = "name"; name.maxLength = 80; name.placeholder = "Name this query"; name.setAttribute("aria-label", "Name this query");
+    const saveButton = document.createElement("button"); saveButton.type = "submit"; saveButton.textContent = "Save current query"; saveForm.append(name, saveButton); library.appendChild(saveForm);
+    const exportButton = document.createElement("button"); exportButton.type = "button"; exportButton.dataset.exportQueries = ""; exportButton.textContent = "Export saved queries"; library.appendChild(exportButton);
+    const importLabel = document.createElement("label"); importLabel.textContent = "Import saved queries";
+    const importFile = document.createElement("input"); importFile.type = "file"; importFile.accept = "application/json,.json"; importFile.dataset.importQueries = ""; importLabel.appendChild(importFile); library.appendChild(importLabel);
+    root.appendChild(library);
     if (!root.childElementCount) { const empty = document.createElement("div"); empty.className = "empty-state"; empty.setAttribute("role", "status"); empty.textContent = "No favorites or recent destinations yet. Search and open a result to add one."; root.appendChild(empty); }
   };
   const openDestination = (url) => { location.href = url; };
   document.addEventListener("click", (event) => {
+    const restoreQuery = event.target.closest("[data-restore-query]");
+    if (restoreQuery) { event.preventDefault(); const input = document.getElementById("palette-input"); if (input) { input.value = restoreQuery.dataset.restoreQuery; input.dispatchEvent(new Event("input", {bubbles:true})); input.focus(); } return; }
+    const saveForm = event.target.closest("[data-save-query-form]");
+    if (saveForm) { event.preventDefault(); const input = saveForm.elements.namedItem("name"); input.setCustomValidity(""); const query = document.getElementById("palette-input")?.value.trim() || ""; const name = input.value.trim(); if (!name || !query || name.length > 80 || query.length > 500) { input.setCustomValidity("Enter a name (up to 80 characters) and a search query (up to 500 characters)."); input.reportValidity(); return; } if (!saveQuery(name, query)) { const status = document.getElementById("search-query-library-status"); if (status) status.textContent = `A saved query named “${name}” already exists in this scope.`; return; } saveForm.reset(); refreshLibrary(); return; }
+    const renameQuery = event.target.closest("[data-rename-query]");
+    if (renameQuery) { const name = window.prompt("Rename saved query", renameQuery.dataset.renameQuery)?.trim(); if (name) { const entries = scopedLibrary(savedKey); const target = entries.find((entry) => entry.name === renameQuery.dataset.renameQuery); if (entries.some((entry) => entry.name === name && entry !== target)) { const status = document.getElementById("search-query-library-status"); if (status) status.textContent = `A saved query named “${name}” already exists in this scope.`; } else if (target) replaceScoped(savedKey, entries.map((entry) => entry === target ? {...entry, name} : entry)); refreshLibrary(); } return; }
+    const deleteQuery = event.target.closest("[data-delete-query]");
+    if (deleteQuery) { const entries = scopedLibrary(savedKey); const deleted = entries.find((entry) => entry.name === deleteQuery.dataset.deleteQuery); if (deleted) { replaceScoped(savedKey, entries.filter((entry) => entry !== deleted)); refreshLibrary(); const button = document.createElement("button"); button.textContent = `Undo deleting ${deleted.name}`; button.dataset.undoQuery = ""; button.dataset.queryEntry = JSON.stringify(deleted); palette()?.append(button); } return; }
+    const undo = event.target.closest("[data-undo-query]");
+    if (undo) { try { const entry = JSON.parse(undo.dataset.queryEntry); saveQuery(entry.name, entry.query); undo.remove(); refreshLibrary(); } catch {} return; }
+    if (event.target.closest("[data-export-queries]")) { const content = JSON.stringify({version:1, queries:scopedLibrary(savedKey).map(({name,query,context,namespace})=>({name,query,context,namespace}))}, null, 2); const link=document.createElement("a"); link.href=URL.createObjectURL(new Blob([content],{type:"application/json"})); link.download="kui-saved-queries.json"; link.click(); URL.revokeObjectURL(link.href); return; }
+    const suggestion = event.target.closest("[data-suggest-query]");
+    if (suggestion) { const input = document.getElementById("palette-input"); if (input) { input.value = suggestion.dataset.suggestQuery; input.dispatchEvent(new Event("input", {bubbles:true})); input.focus(); } return; }
     const pin = event.target.closest("[data-search-pin]");
     if (pin) {
       event.preventDefault(); event.stopPropagation();
@@ -190,6 +274,30 @@
     box.dataset.kindFilter = event.target.value; filterKinds(event.target.value);
     const url = new URL(location.href); if (event.target.value) url.searchParams.set("kindFilter", event.target.value); else url.searchParams.delete("kindFilter");
     history.replaceState(history.state, "", url.pathname + url.search);
+  });
+  document.addEventListener("change", async (event) => {
+    if (!event.target.matches("[data-import-queries]") || !event.target.files?.[0]) return;
+    const file = event.target.files[0], status = document.getElementById("search-query-library-status");
+    try {
+      if (file.size > 32768) throw new Error("Import file exceeds 32 KB.");
+      const data = JSON.parse(await file.text()), scope = libraryScope();
+      if (!data || Object.keys(data).sort().join(",") !== "queries,version" || data.version !== 1 || !Array.isArray(data.queries) || data.queries.length > limit) throw new Error("Unsupported query file version or schema.");
+      const seen = new Set(), incoming = data.queries.map((entry) => {
+        if (!entry || Object.keys(entry).sort().join(",") !== "context,name,namespace,query" || typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 80 || typeof entry.query !== "string" || !entry.query.trim() || entry.query.length > 500 || entry.context !== scope.context || entry.namespace !== scope.namespace) throw new Error("Invalid query entry or scope mismatch.");
+        if (seen.has(entry.name)) throw new Error("Duplicate query name.");
+        seen.add(entry.name); return {name:entry.name.trim(), query:entry.query, ...scope};
+      });
+      if (scopedLibrary(savedKey).some((entry) => seen.has(entry.name))) throw new Error("A query with an imported name already exists in this scope.");
+      replaceScoped(savedKey, [...incoming, ...scopedLibrary(savedKey)]);
+      refreshLibrary(); const live = document.getElementById("search-query-library-status"); if (live) live.textContent = `Imported ${incoming.length} saved queries.`;
+    } catch (error) { if (status) status.textContent = `Import failed: ${error.message}`; }
+    event.target.value = "";
+  });
+  document.addEventListener("input", (event) => {
+    if (event.target.id !== "palette-input") return;
+    const value = event.target.value;
+    clearTimeout(event.target._queryHistoryTimer);
+    event.target._queryHistoryTimer = setTimeout(() => { saveHistory(value); }, 400);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

@@ -15,6 +15,7 @@ import (
 // ForwardHandle tracks one running port-forward session.
 type ForwardHandle struct {
 	ID         string
+	Context    string
 	Namespace  string
 	Pod        string
 	LocalPort  int
@@ -50,6 +51,7 @@ type ForwardManager struct {
 // ForwardSnapshot is a stable value snapshot of one active forward.
 type ForwardSnapshot struct {
 	ID         string
+	Context    string
 	Namespace  string
 	Pod        string
 	LocalPort  int
@@ -61,10 +63,9 @@ func NewForwardManager() *ForwardManager {
 	return &ForwardManager{live: make(map[string]*ForwardHandle)}
 }
 
-// Start begins forwarding localPort -> pod:remotePort and blocks (in a
-// goroutine) until Stop is called or the forwarder errors. It returns once
-// the tunnel is ready to accept connections.
-func (m *ForwardManager) Start(c *Clients, namespace, pod string, localPort, remotePort int, out, errOut io.Writer) (*ForwardHandle, error) {
+// Start begins forwarding localPort -> pod:remotePort and blocks until the tunnel is ready.
+// The context ID is retained so list views can keep sessions scope-isolated.
+func (m *ForwardManager) Start(c *Clients, contextID, namespace, pod string, localPort, remotePort int, out, errOut io.Writer) (*ForwardHandle, error) {
 	transport, upgrader, err := spdy.RoundTripperFor(c.Config)
 	if err != nil {
 		return nil, err
@@ -79,7 +80,7 @@ func (m *ForwardManager) Start(c *Clients, namespace, pod string, localPort, rem
 	m.mu.Unlock()
 
 	h := &ForwardHandle{
-		ID: id, Namespace: namespace, Pod: pod,
+		ID: id, Context: contextID, Namespace: namespace, Pod: pod,
 		LocalPort: localPort, RemotePort: remotePort,
 		stopCh: make(chan struct{}), readyCh: make(chan struct{}),
 		errCh: make(chan error, 1),
@@ -142,7 +143,7 @@ func (m *ForwardManager) Active() []ForwardSnapshot {
 	active := make([]ForwardSnapshot, 0, len(m.live))
 	for _, handle := range m.live {
 		active = append(active, ForwardSnapshot{
-			ID: handle.ID, Namespace: handle.Namespace, Pod: handle.Pod,
+			ID: handle.ID, Context: handle.Context, Namespace: handle.Namespace, Pod: handle.Pod,
 			LocalPort: handle.LocalPort, RemotePort: handle.RemotePort,
 		})
 	}

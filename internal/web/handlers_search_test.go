@@ -110,6 +110,41 @@ func TestParseSearchQueryRejectsMalformedQualifiers(t *testing.T) {
 		}
 	}
 }
+func TestSearchQualifiersValidateAndMatchWithinNamespace(t *testing.T) {
+	for _, query := range []string{`label:"=x"`, `label:"app in ("`, `field:"metadata.name in ("`, `status:broken`, `name:=`} {
+		if _, err := parseSearchQuery(query); err == nil {
+			t.Errorf("accepted invalid query %q", query)
+		}
+	}
+	if _, err := parseSearchQuery(`label:app=`); err != nil {
+		t.Fatalf("empty label value is valid Kubernetes selector syntax: %v", err)
+	}
+	if _, err := parseSearchQuery(`field:metadata.name==`); err != nil {
+		t.Fatalf("empty field value is valid Kubernetes selector syntax: %v", err)
+	}
+	parsed, err := parseSearchQuery(`label:app=web field:metadata.name=web name:=web status:Running`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.ExactName || parsed.Name != "web" || parsed.Status != "running" {
+		t.Fatalf("parsed qualifiers: %+v", parsed)
+	}
+	podsRK, _ := k8s.ByName("pods")
+	makePod := func(name, ns, label, phase string) unstructured.Unstructured {
+		obj := namedObject("Pod", name, ns)
+		obj.SetLabels(map[string]string{"app": label})
+		obj.Object["status"] = map[string]any{"phase": phase}
+		return obj
+	}
+	results := []k8s.KindResult{{Kind: podsRK, List: &unstructured.UnstructuredList{Items: []unstructured.Unstructured{
+		makePod("web", "team-a", "web", "Running"), makePod("web-extra", "team-a", "web", "Running"),
+		makePod("web", "team-b", "web", "Running"), makePod("web", "team-a", "other", "Running"),
+	}}}}
+	got, count := searchObjectsFilteredScoped(results, "ctx", "team-a", parsed)
+	if count != 1 || len(got) != 1 || got[0].Name != "web" || got[0].ListURL != "/c/ctx/team-a/pods" {
+		t.Fatalf("scoped exact selector returned %+v count=%d", got, count)
+	}
+}
 
 func TestSearchObjectsFiltersAndCountsBeyondCaps(t *testing.T) {
 	podsRK, _ := k8s.ByName("pods")

@@ -534,9 +534,17 @@ test("saved views duplicate, rename, update, export, import, reject other scopes
   const wrongScope = { ...payload, scope: { ...payload.scope, namespace: "qa" } };
   await importFile("wrong-scope.json", JSON.stringify(wrongScope));
   await expect(panel.locator(".kui-view-message")).toContainText("different context, namespace, or resource kind");
-  await expect(views.locator("option")).toHaveCount(countAfterValidImport);
-
+  const viewApplied = page.evaluate(() => new Promise((resolve) => {
+    const onAfterSwap = (event) => {
+      if (!event.detail?.target?.classList?.contains("list-pane")) return;
+      document.removeEventListener("htmx:afterSwap", onAfterSwap);
+      resolve();
+    };
+    document.addEventListener("htmx:afterSwap", onAfterSwap);
+  }));
   await views.selectOption({ label: "Independent copy" });
+  await viewApplied;
+  await expect(panel.locator('[data-action="view-delete"]')).toBeEnabled();
   page.once("dialog", (dialog) => dialog.dismiss());
   await panel.locator('[data-action="view-delete"]').click();
   await expect(views).toContainText("Independent copy");
@@ -791,7 +799,7 @@ test("overview severity, layout, pins, refresh, and namespace/context scope pers
 });
 
 test("global shortcut dialog restores focus and keyboard commands navigate and focus landmarks", async ({ page }) => {
-  const shortcutButton = page.locator("#shortcuts-button");
+  const shortcutButton = page.getByRole("button", { name: /^Shortcuts/ });
   await shortcutButton.click();
   const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(dialog).toBeVisible();

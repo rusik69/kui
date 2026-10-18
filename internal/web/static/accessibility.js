@@ -166,7 +166,7 @@
 				event.preventDefault();
 				return;
 			}
-			if (document.querySelector("dialog[open]")) return;
+			if (document.querySelector("#term-pane.terminal-fullscreen")) return;
 			const detailPane = document.querySelector("#detail-pane, #detail");
 			if (detailPane?.children.length && lastDetailTrigger?.isConnected) {
 				const close = detailPane.querySelector("[data-close-detail], .detail-close, button[aria-label*='close' i]");

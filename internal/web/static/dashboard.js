@@ -6,6 +6,8 @@
 	const tiles = ["nodes", "running", "pending", "failed", "namespaces", "warnings"];
 	const installed = new WeakSet();
 	let refreshPending = false;
+	let refreshTimer = null;
+	let extrasRoot = null;
 
 	function scopeKey(root) {
 		return "kui.overview.v1:" + encodeURIComponent(root.dataset.context || "") + ":" + encodeURIComponent(root.dataset.namespace || "_all");
@@ -297,5 +299,127 @@
 	window.addEventListener("storage", () => {
 		const root = document.querySelector("#overview");
 		if (root) render(root);
+	});
+
+	const refreshConfigKey = (root) => scopeKey(root) + ":refresh";
+	const thresholdKey = (root) => "kui.capacity.v1:" + encodeURIComponent(root.dataset.context || "");
+	function initializeExtras(root) {
+		if (!root) return;
+		if (extrasRoot !== root) {
+			if (refreshTimer !== null) window.clearInterval(refreshTimer);
+			refreshTimer = null;
+			extrasRoot = root;
+		}
+		if (root.dataset.extrasReady) return;
+		root.dataset.extrasReady = "true";
+		const prefs = loadPrefs(root);
+		const interval = root.querySelector("#overview-refresh-interval");
+		const pause = root.querySelector("#overview-pause");
+		const stale = root.querySelector("#overview-stale");
+		let config = {};
+		try { config = JSON.parse(localStorage.getItem(refreshConfigKey(root)) || "{}"); } catch {}
+		const allowed = ["0", "15", "30", "60", "300"];
+		if (interval) interval.value = allowed.includes(String(config.interval)) ? String(config.interval) : "0";
+		let paused = Boolean(config.paused);
+		const setPaused = () => {
+			if (!pause) return;
+			pause.setAttribute("aria-pressed", String(paused));
+			pause.textContent = paused ? "Resume refresh" : "Pause refresh";
+		};
+		setPaused();
+		let lastRefresh = Date.now();
+		const refresh = root.querySelector("#overview-refresh");
+		if (interval) interval.addEventListener("change", () => {
+			try { localStorage.setItem(refreshConfigKey(root), JSON.stringify({ interval: interval.value, paused })); } catch {}
+		});
+		pause?.addEventListener("click", () => {
+			paused = !paused; setPaused();
+			try { localStorage.setItem(refreshConfigKey(root), JSON.stringify({ interval: interval?.value || "0", paused })); } catch {}
+		});
+		refreshTimer = window.setInterval(() => {
+			if (!root.isConnected) return;
+			const seconds = Number(interval?.value || 0);
+			if (seconds > 0 && !paused && !refreshPending && Date.now() - lastRefresh >= seconds * 1000) refresh?.click();
+			if (stale) stale.hidden = !refreshPending && Date.now() - lastRefresh < Math.max(60000, Number(interval?.value || 0) * 2000);
+		}, 1000);
+		root.addEventListener("click", (event) => {
+			if (event.target.closest("#overview-refresh")) {
+				lastRefresh = Date.now();
+				if (stale) stale.hidden = false;
+				const status = root.querySelector("#overview-refresh-status");
+				if (status) status.dataset.refreshing = "true";
+			}
+			if (event.target.closest("#overview-copy-summary")) {
+				const value = `${root.dataset.context} / ${root.dataset.namespace === "_all" ? "all namespaces" : root.dataset.namespace}: ${root.querySelector('[data-overview-tile="nodes"] .value')?.textContent.trim() || "nodes unavailable"} nodes ready; ${root.querySelector('[data-overview-tile="pending"] .value')?.textContent.trim() || "?"} pods pending; ${root.querySelector('[data-overview-tile="failed"] .value')?.textContent.trim() || "?"} pods failed; ${root.querySelector('[data-overview-tile="warnings"] .value')?.textContent.trim() || "?"} warning events.`;
+				navigator.clipboard?.writeText(value).then(() => announce(root, "Health summary copied.")).catch(() => announce(root, "Could not copy health summary."));
+			}
+			if (event.target.closest("#overview-export")) {
+				const snapshot = { timestamp: new Date().toISOString(), context: root.dataset.context, namespace: root.dataset.namespace, summary: {
+					nodesReady: root.querySelector('[data-overview-tile="nodes"] .value')?.textContent.trim() || "",
+					podsRunning: root.querySelector('[data-overview-tile="running"] .value')?.textContent.trim() || "",
+					podsPending: root.querySelector('[data-overview-tile="pending"] .value')?.textContent.trim() || "",
+					podsFailed: root.querySelector('[data-overview-tile="failed"] .value')?.textContent.trim() || "",
+					warningEvents: root.querySelector('[data-overview-tile="warnings"] .value')?.textContent.trim() || "",
+				}};
+				const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(snapshot, null, 2)], {type:"application/json"})); link.download = "kui-overview.json"; link.click(); URL.revokeObjectURL(link.href);
+			}
+			if (event.target.closest("#overview-print")) window.print();
+		});
+		const metric = root.querySelector("#capacity-metric"), threshold = root.querySelector("[data-capacity-threshold]");
+		let thresholds = {};
+		try { thresholds = JSON.parse(localStorage.getItem(thresholdKey(root)) || "{}"); } catch {}
+		function thresholdRender() {
+			const name = metric?.value || "cpu", value = Number(thresholds[name] || 80);
+			if (threshold) threshold.value = String(value);
+			const bar = root.querySelectorAll(".capacity-bar")[["cpu","memory","pods"].indexOf(name)];
+			const percent = Number(bar?.querySelector(".capacity-label span:last-child")?.textContent || 0);
+			const warning = root.querySelector("#capacity-threshold-warning");
+			if (warning) warning.textContent = percent >= value ? `${name.toUpperCase()} capacity warning: ${percent}% meets or exceeds ${value}%.` : "";
+			bar?.querySelector(".bar-fill")?.classList.toggle("bar-fill-warning", percent >= value);
+		}
+		metric?.addEventListener("change", thresholdRender);
+		root.querySelector("#capacity-threshold-save")?.addEventListener("click", () => {
+			const value = Number(threshold?.value);
+			if (!Number.isInteger(value) || value < 1 || value > 100) { threshold?.setAttribute("aria-invalid", "true"); threshold?.focus(); return; }
+			threshold?.removeAttribute("aria-invalid"); thresholds[metric.value] = value;
+			try { localStorage.setItem(thresholdKey(root), JSON.stringify(thresholds)); } catch {}
+			thresholdRender();
+		});
+		thresholdRender();
+		const filter = root.querySelector("#event-summary-filter");
+		filter?.addEventListener("input", () => {
+			const query = filter.value.toLocaleLowerCase();
+			root.querySelectorAll("[data-event-group]").forEach(row => {
+				row.hidden = !row.dataset.search.toLocaleLowerCase().includes(query);
+				const details = row.nextElementSibling;
+				if (details?.classList.contains("event-group-records") && row.hidden) details.hidden = true;
+			});
+		});
+		root.querySelectorAll(".event-group-expand").forEach(button => button.addEventListener("click", () => {
+			const row = button.closest("[data-event-group]"), details = row?.nextElementSibling;
+			if (!details?.classList.contains("event-group-records")) return;
+			details.hidden = !details.hidden;
+			button.setAttribute("aria-expanded", String(!details.hidden));
+		}));
+		root.querySelectorAll("[data-sort-events]").forEach(button => button.addEventListener("click", () => {
+			const body = root.querySelector("#event-summary-body"); if (!body) return;
+			const key = button.dataset.sortEvents;
+			const pairs = [...body.querySelectorAll("[data-event-group]")].map(row => [row, row.nextElementSibling]);
+			pairs.sort((a,b) => key === "count" ? Number(a[0].dataset.count)-Number(b[0].dataset.count) : a[0].dataset[key].localeCompare(b[0].dataset[key]));
+			if (button.dataset.direction === "asc") pairs.reverse();
+			button.dataset.direction = button.dataset.direction === "asc" ? "desc" : "asc";
+			pairs.forEach(([row, details]) => { body.append(row); if (details?.classList.contains("event-group-records")) body.append(details); });
+		}));
+	}
+	document.addEventListener("DOMContentLoaded", () => initializeExtras(document.querySelector("#overview")));
+	document.addEventListener("htmx:afterSwap", event => {
+		const target = event.detail?.target;
+		const root = target?.matches?.("#overview") ? target : target?.querySelector?.("#overview");
+		if (root) initializeExtras(root);
+		else if (extrasRoot && !extrasRoot.isConnected) {
+			if (refreshTimer !== null) window.clearInterval(refreshTimer);
+			refreshTimer = null;
+			extrasRoot = null;
+		}
 	});
 })();

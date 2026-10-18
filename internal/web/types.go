@@ -74,7 +74,10 @@ type DetailData struct {
 	Context, Namespace, Resource, Name, Kind string
 	Age                                      string
 	DotClass                                 string
+	UID, APIVersion, ResourceVersion         string
+	CanonicalURL                             string
 	Labels, Annotations                      map[string]string
+	Owners                                   []OwnerReference
 	Conditions                               []Condition
 	Containers                               []Container
 	Events                                   []Event
@@ -106,6 +109,10 @@ type DetailData struct {
 
 	IsSecret   bool
 	SecretData []SecretEntry
+}
+
+type OwnerReference struct {
+	Kind, Name, DetailURL string
 }
 
 // NodeAddress is one entry from a Node's status.addresses.
@@ -154,6 +161,22 @@ type EventGroup struct {
 	Count        int
 	LatestAge    string
 	URL          string
+	SearchText   string
+	Events       []OverviewEvent
+	MoreEvents   int
+}
+
+type OverviewEvent struct {
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion"`
+	Namespace       string `json:"namespace"`
+	Kind            string `json:"kind"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Reason          string `json:"reason"`
+	Message         string `json:"message"`
+	Age             string `json:"age"`
+	URL             string `json:"url"`
 }
 
 // OverviewData backs the "overview" fragment: cluster-wide summary tiles.

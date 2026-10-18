@@ -2,9 +2,8 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"net/url"
 	"sort"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"github.com/rusik69/kui/internal/k8s"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // renderOverview mirrors renderAllResourcesDirectory's exact 3-way branching
@@ -20,6 +21,10 @@ import (
 // list-pane fragment mechanism every other resource uses — list-pane's own
 // hx-get just happens to land on the stat-tile fragment instead of a table.
 func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName, ns string, c *k8s.Clients) {
+	if r.URL.Query().Get("frame") == "event-records" {
+		s.renderOverviewEventRecords(w, r, c, ns)
+		return
+	}
 	if r.URL.Query().Get("frame") == "table" {
 		data, err := s.buildOverviewData(r.Context(), c, ns)
 		if err != nil {
@@ -31,7 +36,17 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 		data.Context = ctxName
 		data.Namespace = ns
 		for i := range data.EventGroups {
-			data.EventGroups[i].URL = fmt.Sprintf("/c/%s/%s/events?fieldSelector=%s", ctxName, nsOrDash(ns), url.QueryEscape("type="+data.EventGroups[i].Type+",reason="+data.EventGroups[i].Reason))
+			group := &data.EventGroups[i]
+			group.URL = fmt.Sprintf("/c/%s/%s/events?fieldSelector=%s", ctxName, nsOrDash(ns), url.QueryEscape("type="+group.Type+",reason="+group.Reason))
+			for j := range group.Events {
+				record := &group.Events[j]
+				for _, kind := range k8s.Registry {
+					if kind.Kind == record.Kind {
+						record.URL = fmt.Sprintf("/c/%s/%s/%s/%s", ctxName, nsOrDash(record.Namespace), kind.Name, url.PathEscape(record.Name))
+						break
+					}
+				}
+			}
 		}
 		s.render(w, "overview", data)
 		return
@@ -46,6 +61,36 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 		s.render(w, "content", page)
 	} else {
 		s.render(w, "page", page)
+	}
+}
+func (s *Server) renderOverviewEventRecords(w http.ResponseWriter, r *http.Request, c *k8s.Clients, ns string) {
+	events, err := c.Clientset.CoreV1().Events(nsOrAll(ns)).List(r.Context(), metav1.ListOptions{Limit: 200})
+	if err != nil {
+		http.Error(w, "event history unavailable", http.StatusBadGateway)
+		return
+	}
+	sort.SliceStable(events.Items, func(i, j int) bool { return eventTimestamp(events.Items[i]).After(eventTimestamp(events.Items[j])) })
+	eventType, reason := r.URL.Query().Get("type"), r.URL.Query().Get("reason")
+	out := make([]OverviewEvent, 0, len(events.Items))
+	for _, event := range events.Items {
+		if eventType != "" && event.Type != eventType || reason != "" && event.Reason != reason {
+			continue
+		}
+		record := OverviewEvent{UID: string(event.UID), ResourceVersion: event.ResourceVersion, Namespace: event.Namespace, Kind: event.InvolvedObject.Kind, Name: event.InvolvedObject.Name, Type: event.Type, Reason: event.Reason, Message: event.Message, Age: age(eventTimestamp(event))}
+		for _, kind := range k8s.Registry {
+			if kind.Kind == record.Kind {
+				record.URL = fmt.Sprintf("/c/%s/%s/%s/%s", r.PathValue("ctx"), nsOrDash(record.Namespace), kind.Name, url.PathEscape(record.Name))
+				break
+			}
+		}
+		out = append(out, record)
+	}
+	if events.Continue != "" {
+		w.Header().Set("X-Kui-Partial", "true")
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		return
 	}
 }
 
@@ -201,8 +246,10 @@ func eventTimestamp(event corev1.Event) time.Time {
 func groupEvents(events []corev1.Event) ([]EventGroup, int) {
 	type eventKey struct{ eventType, reason string }
 	type summary struct {
-		count  int
-		latest time.Time
+		count      int
+		latest     time.Time
+		events     []corev1.Event
+		searchText string
 	}
 	grouped := make(map[eventKey]summary)
 	for _, event := range events {
@@ -213,18 +260,32 @@ func groupEvents(events []corev1.Event) ([]EventGroup, int) {
 		if latest.After(item.latest) {
 			item.latest = latest
 		}
+		item.events = append(item.events, event)
+		if len(item.searchText) < 4096 && event.Message != "" {
+			message := event.Message
+			if remaining := 4096 - len(item.searchText); len(message) > remaining {
+				message = message[:remaining]
+			}
+			item.searchText += " " + message
+		}
 		grouped[key] = item
 	}
-
 	groups := make([]EventGroup, 0, len(grouped))
 	for key, item := range grouped {
 		latestAge := "unknown"
 		if !item.latest.IsZero() {
 			latestAge = age(item.latest)
 		}
-		groups = append(groups, EventGroup{
-			Type: key.eventType, Reason: key.reason, Count: item.count, LatestAge: latestAge,
-		})
+		sort.Slice(item.events, func(i, j int) bool { return eventTimestamp(item.events[i]).After(eventTimestamp(item.events[j])) })
+		group := EventGroup{Type: key.eventType, Reason: key.reason, Count: item.count, LatestAge: latestAge, SearchText: item.searchText}
+		preview := min(5, len(item.events))
+		for _, event := range item.events[:preview] {
+			timestamp := eventTimestamp(event)
+			record := OverviewEvent{UID: string(event.UID), ResourceVersion: event.ResourceVersion, Namespace: event.Namespace, Kind: event.InvolvedObject.Kind, Name: event.InvolvedObject.Name, Type: event.Type, Reason: event.Reason, Message: event.Message, Age: age(timestamp)}
+			group.Events = append(group.Events, record)
+		}
+		group.MoreEvents = item.count - preview
+		groups = append(groups, group)
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Count != groups[j].Count {

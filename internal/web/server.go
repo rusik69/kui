@@ -287,6 +287,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/pods/{name}/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/pods/{name}/exec", s.handleExec)
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/pods/{name}/portforward", s.protectMutation(s.handlePortForwardStart))
+	s.mux.HandleFunc("GET /portforward", s.handlePortForwardList)
 	s.mux.HandleFunc("DELETE /portforward/{id}", s.protectMutation(s.handlePortForwardStop))
 
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/debug-shell", s.protectMutation(s.handleDebugShell))

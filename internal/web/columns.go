@@ -14,6 +14,7 @@ type Row struct {
 	Name        string
 	Namespace   string
 	Cells       []string
+	Annotations map[string]string
 	CellClasses []string // optional, same length as Cells when set; "" entries mean no extra class
 	DotClass    string   // "dot-green" | "dot-yellow" | "dot-red" | "dot-gray" | ""
 	DetailURL   string   // filled in by the handler after RowCells returns

@@ -218,6 +218,7 @@ func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.Reso
 	for i := range list.Items {
 		obj := &list.Items[i]
 		row := RowCells(rk.Name, obj)
+		row.Annotations = obj.GetAnnotations()
 		row.DetailURL = resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName())
 		if hasMetrics {
 			hadClasses := len(row.CellClasses) == len(row.Cells)
@@ -321,6 +322,24 @@ func (s *Server) handleResourceDetail(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "detail", detail)
 }
 
+func ownerResourceKind(c *k8s.Clients, kind string) (k8s.ResourceKind, bool) {
+	for _, candidate := range k8s.Registry {
+		if candidate.Kind == kind {
+			return candidate, true
+		}
+	}
+	if c == nil || c.Discovery == nil {
+		return k8s.ResourceKind{}, false
+	}
+	resources, _ := k8s.AllAPIResources(c)
+	for _, candidate := range resources {
+		if candidate.Kind == kind {
+			return candidate, true
+		}
+	}
+	return k8s.ResourceKind{}, false
+}
+
 func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.ResourceKind, ctxName, ns string, obj *unstructured.Unstructured) (DetailData, error) {
 	row := RowCells(rk.Name, obj)
 
@@ -331,15 +350,35 @@ func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.Res
 		return DetailData{}, err
 	}
 
+	detailURL := resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName())
 	d := DetailData{
 		Context: ctxName, Namespace: obj.GetNamespace(), Resource: rk.Name, Name: obj.GetName(), Kind: rk.Kind,
-		Age:         age(obj.GetCreationTimestamp().Time),
-		DotClass:    row.DotClass,
-		Labels:      obj.GetLabels(),
-		Annotations: obj.GetAnnotations(),
-		YAML:        string(yamlBytes),
-		YAMLDiffURL: resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName()) + "/yaml/diff",
-		DeleteURL:   resourcePath(ctxName, obj.GetNamespace(), rk.Name, obj.GetName()),
+		Age:             age(obj.GetCreationTimestamp().Time),
+		DotClass:        row.DotClass,
+		UID:             string(obj.GetUID()),
+		APIVersion:      obj.GetAPIVersion(),
+		ResourceVersion: obj.GetResourceVersion(),
+		CanonicalURL:    detailURL,
+		Labels:          obj.GetLabels(),
+		Annotations:     obj.GetAnnotations(),
+		YAML:            string(yamlBytes),
+		YAMLDiffURL:     detailURL + "/yaml/diff",
+		DeleteURL:       detailURL,
+	}
+	for _, owner := range obj.GetOwnerReferences() {
+		ownerKind, found := ownerResourceKind(c, owner.Kind)
+		if !found {
+			continue
+		}
+		ownerNS := obj.GetNamespace()
+		if !ownerKind.Namespaced {
+			ownerNS = "_"
+		}
+		ownerURL := resourcePath(ctxName, ownerNS, ownerKind.Name, owner.Name)
+		live, getErr := k8s.Get(ctx, c, ownerKind, ownerNS, owner.Name)
+		if getErr == nil && live.GetUID() == owner.UID {
+			d.Owners = append(d.Owners, OwnerReference{Kind: owner.Kind, Name: owner.Name, DetailURL: ownerURL})
+		}
 	}
 
 	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")

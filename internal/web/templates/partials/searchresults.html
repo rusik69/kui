@@ -1,8 +1,14 @@
 {{define "searchresults"}}
-{{if .Error}}<div class="error-state" role="alert">{{.Error}}{{if .InvalidQuery}} <span>Try <code>kind:Pod</code>, <code>namespace:"team a"</code>, or <code>name:web</code>.</span>{{else if .Truncated}} <span>Use <code>kind:</code> or <code>namespace:</code> to narrow the results.</span>{{end}}</div>{{end}}
-{{if and (not .Query) (not .Error)}}<div class="empty-state palette-empty" role="status">Type a name or qualifier such as <code>kind:Pod</code>. Press <kbd>?</kbd> for shortcuts.</div>{{end}}
+{{if .Error}}<div class="error-state" role="alert">{{.Error}}{{if .InvalidQuery}} <span>Try <code>kind:Pod</code>, <code>namespace:"team a"</code>, <code>name:=web</code>, <code>status:Running</code>, <code>label:app=web</code>, or <code>field:metadata.name=web</code>.</span>{{else if .Truncated}} <span>Use <code>kind:</code> or <code>namespace:</code> to narrow the results.</span>{{end}}</div>{{end}}
+{{if and (not .Query) (not .Error)}}<div class="empty-state palette-empty" role="status">Type a name or qualifier such as <code>kind:Pod</code>. Press <kbd>?</kbd> for shortcuts.</div><div class="search-suggestions" role="group" aria-label="Search qualifier suggestions"><button type="button" data-suggest-query="kind:Pod">kind:Pod</button><button type="button" data-suggest-query="status:Running">status:Running</button><button type="button" data-suggest-query="label:app=web">label:app=web</button><button type="button" data-suggest-query="field:metadata.name=web">field:metadata.name=web</button><button type="button" data-suggest-query="name:=web">name:=web</button></div>{{end}}
 {{if .Query}}
 <div class="search-workbench" data-search-context="{{.Context}}" data-search-namespace="{{.Namespace}}" data-search-query="{{.Query}}" data-kind-filter="{{.KindFilter}}">
+  <div class="search-query-tools" aria-label="Saved search queries">
+    <form data-save-query-form><label>Name query <input name="name" maxlength="80" required></label><button type="submit">Save query</button></form>
+    <button type="button" data-export-queries>Export saved queries</button>
+    <label>Import saved queries <input type="file" accept="application/json,.json" data-import-queries></label>
+    <div data-query-library></div><div id="search-query-library-status" role="status" aria-live="polite"></div>
+  </div>
   {{if or .QualifierKind .QualifierNS .QualifierName}}<div class="search-chips" aria-label="Active query filters">
     {{if .QualifierKind}}<button type="button" class="search-chip" data-remove-qualifier="kind">kind: {{.QualifierKind}} <span aria-hidden="true">×</span><span class="sr-only">Remove kind filter</span></button>{{end}}
     {{if .QualifierNS}}<button type="button" class="search-chip" data-remove-qualifier="namespace">namespace: {{.QualifierNS}} <span aria-hidden="true">×</span><span class="sr-only">Remove namespace filter</span></button>{{end}}

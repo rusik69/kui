@@ -1,0 +1,23 @@
+.section-disclosure { display:block; width:100%; text-align:left; cursor:pointer; }
+.section-disclosure::before { content:"▾"; display:inline-block; width:1.3em; }
+.section-disclosure[aria-expanded="false"]::before { content:"▸"; }
+.detail-section-content[hidden] { display:none; }
+.resource-identity, .owner-references, .active-forwards { margin: .75rem 0; padding: .75rem; border:1px solid var(--border,#444); border-radius:.5rem; }
+#yaml-line-numbers span { display:block; line-height:1.5; }
+#yaml-line-numbers .current-line { color:var(--text,#fff); font-weight:700; }
+.resource-identity h3, .owner-references h3, .active-forwards h3 { margin:0 0 .5rem; }
+.resource-identity dl { display:grid; grid-template-columns:max-content 1fr; gap:.25rem .75rem; }
+.metadata-pill { cursor:pointer; font:inherit; }
+.yaml-workbench-tools { display:flex; flex-wrap:wrap; align-items:end; gap:.5rem; margin-bottom:.5rem; }
+.yaml-editor-wrap { display:grid; grid-template-columns:minmax(2.5rem,auto) minmax(0,1fr); align-items:stretch; overflow:hidden; border:1px solid var(--border,#444); }
+#yaml-line-numbers { margin:0; padding:.7rem .5rem; text-align:right; overflow:hidden; color:var(--text-dim,#888); user-select:none; background:var(--surface-code,#171717); }
+.yaml-editor-wrap .yaml-editor { min-width:0; width:100%; margin:0; border:0; }
+.yaml-editor.yaml-wrap { white-space:pre-wrap; overflow-wrap:anywhere; }
+.log-highlights { margin:.5rem 0; }
+.log-highlights textarea { display:block; min-width:min(100%,24rem); min-height:4rem; }
+.log-highlight { color:inherit; background:#b7791f; }
+.log-highlight-1 { background:#087e8b; }.log-highlight-2 { background:#805ad5; }.log-highlight-3 { background:#2f855a; }.log-highlight-4 { background:#c05621; }
+.log-bookmark { display:block; max-width:100%; margin:.2rem 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#term-pane.terminal-fullscreen { position:fixed; z-index:10000; inset:0; padding:1rem; background:var(--surface,#111); }
+@media (max-width:600px) { .yaml-workbench-tools { align-items:stretch; flex-direction:column; }.resource-identity dl { grid-template-columns:1fr; } }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; animation:none!important; } }

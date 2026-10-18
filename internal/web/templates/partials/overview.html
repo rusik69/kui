@@ -7,7 +7,13 @@
     </div>
     <div class="overview-controls">
       <time id="overview-updated" datetime="{{.UpdatedAt.Format "2006-01-02T15:04:05Z07:00"}}">Updated {{.UpdatedAt.Format "15:04:05"}}</time>
+      <span id="overview-stale" role="status" hidden>Overview data may be stale.</span>
+      <label>Refresh interval <select id="overview-refresh-interval" aria-label="Overview refresh interval"><option value="0">Manual</option><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="300">5 minutes</option></select></label>
+      <button class="btn" id="overview-pause" type="button" aria-pressed="false">Pause refresh</button>
       <button class="btn" id="overview-refresh" type="button">Refresh</button>
+      <button class="btn" id="overview-copy-summary" type="button">Copy health summary</button>
+      <button class="btn" id="overview-export" type="button">Export JSON</button>
+      <button class="btn" id="overview-print" type="button">Print</button>
       <span id="overview-refresh-status" class="sr-only" role="status" aria-live="polite"></span>
       <button class="btn" id="overview-settings-button" type="button" aria-controls="overview-settings-panel" aria-expanded="false">Customize</button>
     </div>
@@ -77,7 +83,7 @@
     </div>
   </section>
   <section class="overview-section" data-overview-section="capacity" aria-label="Resource capacity">
-    <h2 class="section-title">Capacity</h2>
+    <div class="overview-section-heading"><h2 class="section-title">Capacity</h2><label class="overview-filter">Metric <select id="capacity-metric" aria-label="Capacity threshold metric"><option value="cpu">CPU</option><option value="memory">Memory</option><option value="pods">Pods</option></select></label><label class="overview-filter">Warning threshold % <input type="number" min="1" max="100" step="1" value="80" data-capacity-threshold aria-label="Warning threshold percentage"></label><button type="button" class="btn" id="capacity-threshold-save">Save threshold</button><span id="capacity-threshold-warning" role="status"></span></div>
     <div class="capacity-row">
       <div class="capacity-bar">
         <div class="capacity-label"><span>CPU</span><span>{{pct .CPURequestedMilli .CPUAllocatableMilli}}%</span></div>
@@ -157,13 +163,13 @@
     </table>
   </section>
   <section class="overview-section" data-overview-section="event-groups" aria-label="Event summary">
-    <h2 class="section-title">Event summary</h2>
+    <div class="overview-section-heading"><h2 class="section-title">Event summary</h2><label class="overview-filter">Filter <input type="search" id="event-summary-filter" aria-label="Filter event summaries by type, reason, or message"></label></div>
     {{if not .EventsAvailable}}<div class="error-state" role="status">{{if .EventsError}}{{.EventsError}}{{else}}Event data is unavailable.{{end}}</div>
     {{else if not .EventGroups}}<p class="empty-state">No events in this namespace scope.</p>
     {{else}}
     <table class="resource-table">
-      <thead><tr><th>Type</th><th>Reason</th><th>Count</th><th>Latest</th></tr></thead>
-      <tbody>{{range .EventGroups}}<tr><td><a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{.URL}}">{{.Type}}</a></td><td>{{.Reason}}</td><td>{{.Count}}</td><td>{{.LatestAge}}</td></tr>{{end}}</tbody>
+      <thead><tr><th><button type="button" data-sort-events="type">Type</button></th><th><button type="button" data-sort-events="reason">Reason</button></th><th><button type="button" data-sort-events="count">Count</button></th><th>Latest</th></tr></thead>
+      <tbody id="event-summary-body">{{range $group := .EventGroups}}<tr data-event-group data-type="{{$group.Type}}" data-reason="{{$group.Reason}}" data-count="{{$group.Count}}" data-search="{{$group.Type}} {{$group.Reason}} {{$group.SearchText}}"><td><button type="button" class="event-group-expand" aria-expanded="false">{{$group.Type}}</button></td><td>{{$group.Reason}}</td><td>{{$group.Count}}</td><td>{{$group.LatestAge}}</td></tr><tr class="event-group-records" hidden><td colspan="4"><ul>{{range $group.Events}}<li data-event-record data-event-uid="{{.UID}}" data-event-resource-version="{{.ResourceVersion}}" data-namespace="{{.Namespace}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-severity="{{$group.Type}}" data-reason="{{$group.Reason}}" data-message="{{.Message}}" data-url="{{.URL}}"><a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#detail-pane" hx-swap="innerHTML">{{.Kind}}/{{.Name}}</a> · {{.Age}} · {{.Message}}</li>{{end}}{{if gt $group.MoreEvents 0}}<li class="text-dim">{{$group.MoreEvents}} more matching records; <a href="{{$group.URL}}" hx-get="{{$group.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$group.URL}}">open matching Events</a></li>{{end}}</ul></td></tr>{{end}}</tbody>
     </table>
     {{if gt .MoreEventGroups 0}}<p class="text-dim">Showing the most frequent 8 event groups; {{.MoreEventGroups}} more groups are available in Events.</p>{{end}}
     {{end}}

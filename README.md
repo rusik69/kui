@@ -21,6 +21,14 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 - `--access-log` opt-in HTTP request logging (method, path, status, duration; no query string)
 - `--headless` run the HTTP server without a native window; it exits on SIGINT or SIGTERM
 
+### Prebuilt release binaries
+
+GitHub releases provide one executable per platform: Linux x86_64/ARM64,
+macOS Intel/Apple silicon, and Windows x86_64. Download the matching binary
+directly; no archive extraction is required. The native webview still requires
+platform libraries: GTK 3 and WebKitGTK 4.0 on Linux, and the WebView2 runtime
+on Windows.
+
 ## What it does
 
 - Browse Pods/Deployments/ReplicaSets/Jobs/CronJobs/StatefulSets/DaemonSets,
@@ -115,5 +123,6 @@ probes the Kubernetes API.
 ## Stack
 
 Go backend (`client-go` + dynamic/discovery clients), HTMX + vanilla JS
-frontend (server-rendered `html/template`, no Node/npm build step), single
-static binary via `go:embed`.
+frontend (server-rendered `html/template`, no Node/npm build step), one Go
+executable with embedded frontend assets via `go:embed`; native webview runtimes
+remain platform dependencies.

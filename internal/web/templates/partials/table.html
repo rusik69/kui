@@ -3,18 +3,35 @@
   <strong>{{.Kind}}</strong>
   <span class="sidebar-count">{{len .Rows}}</span>
 </div>
+{{if .Selectable}}
+<div class="table-selectors">
+  <label>Labels <input type="text" id="label-selector" value="{{.LabelSelector}}" placeholder="app=web" onkeydown="if(event.key === 'Enter') kui.applyResourceSelectors()"></label>
+  <label>Fields <input type="text" id="field-selector" value="{{.FieldSelector}}" placeholder="status.phase=Running" onkeydown="if(event.key === 'Enter') kui.applyResourceSelectors()"></label>
+  <button type="button" class="btn" onclick="kui.applyResourceSelectors()">Apply selectors</button>
+  <label>Rows per page <input type="number" id="page-size" min="1" max="1000" value="{{.PageSize}}" onchange="kui.changeResourcePageSize(this.value)"></label>
+  <label>Density
+    <select id="row-density" onchange="kui.setRowDensity(this.value)">
+      <option value="default">Default</option>
+      <option value="compact">Compact</option>
+      <option value="comfortable">Comfortable</option>
+    </select>
+  </label>
+  <button type="button" id="previous-page" class="btn" disabled onclick="kui.previousResourcePage()">Previous</button>
+  {{if .NextPageURL}}<button type="button" class="btn" data-next-url="{{.NextPageURL}}" onclick="kui.nextResourcePage(this.dataset.nextUrl)">Next</button>{{end}}
+</div>
+{{end}}
 {{if .MetricsURL}}<div hx-get="{{.MetricsURL}}" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>{{end}}
 <table class="resource-table" id="kui-table">
   <thead>
     <tr>
       {{if .Selectable}}<th class="select-col"><input type="checkbox" id="select-all-rows"></th>{{end}}
-      {{if .ShowNamespace}}<th>Namespace</th>{{end}}
-      {{range .Columns}}<th>{{.}}</th>{{end}}
+      {{if .ShowNamespace}}<th scope="col" tabindex="0" aria-sort="none">Namespace</th>{{end}}
+      {{range .Columns}}<th scope="col" tabindex="0" aria-sort="none">{{.}}</th>{{end}}
     </tr>
   </thead>
   <tbody>
     {{if not .Rows}}
-    <tr><td colspan="{{len .Columns}}" class="empty-state">No {{.Kind}} resources found</td></tr>
+    <tr><td colspan="{{.HeaderColumnCount}}" class="empty-state">No {{.Kind}} resources found</td></tr>
     {{end}}
     {{range $row := .Rows}}
     {{if $.RowsAreKinds}}
@@ -26,12 +43,13 @@
         {{if $.HasMetrics}}data-metric-key="{{metricKey $row.Namespace $row.Name}}"{{end}}>
     {{end}}
       {{if $.Selectable}}<td class="select-col" onclick="event.stopPropagation()"><input type="checkbox" class="row-select" data-id="{{$row.DetailURL}}"></td>{{end}}
-      {{if $.ShowNamespace}}<td>{{$row.Namespace}}</td>{{end}}
+      {{if $.ShowNamespace}}<td>{{$row.Namespace}} <button type="button" class="copy-action" data-copy-text="{{$row.Namespace}}" aria-label="Copy namespace" title="Copy namespace" onclick="event.stopPropagation(); kui.copyText(this.dataset.copyText)"></button></td>{{end}}
       {{range $i, $cell := $row.Cells}}
-        <td class="{{cellClass $row.CellClasses $i}}">{{if eq $i 0}}{{if $row.DotClass}}<span class="dot {{$row.DotClass}}"></span>{{end}}{{end}}{{$cell}}</td>
+        <td class="{{cellClass $row.CellClasses $i}}">{{if eq $i 0}}{{if $row.DotClass}}<span class="dot {{$row.DotClass}}"></span>{{end}}{{end}}{{$cell}}{{if and (eq $i 0) (eq (index $.Columns 0) "Name")}} <button type="button" class="copy-action" data-copy-text="{{$row.Name}}" aria-label="Copy resource name" title="Copy resource name" onclick="event.stopPropagation(); kui.copyText(this.dataset.copyText)"></button>{{end}}</td>
       {{end}}
     </tr>
     {{end}}
+    <tr data-filter-empty style="display:none"><td colspan="{{.HeaderColumnCount}}" class="empty-state">No resources match this filter</td></tr>
   </tbody>
 </table>
 {{end}}

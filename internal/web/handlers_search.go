@@ -28,6 +28,7 @@ type SearchObject struct {
 type searchResults struct {
 	Commands []SearchCommand
 	Objects  []SearchObject
+	Error    string
 }
 
 const searchObjectCap = 30
@@ -41,7 +42,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
-		fmt.Fprint(w, `<div class="empty-state">Type to search&hellip;</div>`)
+		fmt.Fprint(w, `<div class="empty-state" role="status">Type to search&hellip;</div>`)
 		return
 	}
 	needle := strings.ToLower(q)
@@ -49,10 +50,29 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	results := searchResults{Commands: s.searchCommands(ctxName, ns, needle)}
 
 	c, err := s.clients(ctxName)
-	if err == nil {
+	if err != nil {
+		results.Error = "Object search unavailable: " + err.Error()
+	} else {
 		fanCtx, cancel := context.WithTimeout(r.Context(), fanOutTimeout)
 		defer cancel()
-		results.Objects = searchObjects(k8s.FanOutList(fanCtx, c, ns), ctxName, needle)
+		fanout := k8s.FanOutList(fanCtx, c, ns)
+		results.Objects = searchObjects(fanout, ctxName, needle)
+		failures := make([]string, 0, len(fanout))
+		successes := 0
+		for _, result := range fanout {
+			if result.Err != nil {
+				failures = append(failures, result.Kind.Kind)
+			} else {
+				successes++
+			}
+		}
+		if len(failures) > 0 {
+			prefix := "Some resource kinds could not be searched: "
+			if successes == 0 {
+				prefix = "Object search unavailable; failed resource kinds: "
+			}
+			results.Error = prefix + strings.Join(failures, ", ")
+		}
 	}
 
 	s.render(w, "searchresults", results)

@@ -2,6 +2,7 @@
 {{if not .Changed}}
 <div class="empty-state">No changes</div>
 {{else}}
+<div class="yaml-dry-run" role="status">Server-side dry-run passed; no changes have been applied.</div>
 <div class="yaml-diff">
   {{range .Lines}}
   {{if eq .Type "add"}}<div class="diff-line diff-add">+ {{.Text}}</div>{{end}}

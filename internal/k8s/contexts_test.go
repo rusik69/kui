@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,5 +69,59 @@ func TestManagerDefaultContext(t *testing.T) {
 	}
 	if name != "dev" {
 		t.Errorf("expected current-context \"dev\", got %q", name)
+	}
+}
+
+func TestManagerReloadsKubeconfigAndDropsStaleClients(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	write := func(contextName, server string) {
+		t.Helper()
+		config := fmt.Sprintf(`apiVersion: v1
+kind: Config
+current-context: %s
+clusters:
+- name: cluster
+  cluster:
+    server: %s
+contexts:
+- name: %s
+  context:
+    cluster: cluster
+    user: test
+users:
+- name: test
+  user: {}
+`, contextName, server, contextName)
+		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("dev", "https://dev.example.test")
+	manager := NewManager(path)
+	dev, err := manager.Clients("dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.Config.Host != "https://dev.example.test" {
+		t.Fatalf("initial client host = %q", dev.Config.Host)
+	}
+
+	write("prod", "https://prod.example.test")
+	contexts, err := manager.ListContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(contexts) != 1 || contexts[0].Name != "prod" || !contexts[0].Current {
+		t.Fatalf("reloaded contexts = %+v", contexts)
+	}
+	if _, err := manager.Clients("dev"); err == nil {
+		t.Fatal("removed context unexpectedly returned its cached client")
+	}
+	prod, err := manager.Clients("prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prod.Config.Host != "https://prod.example.test" {
+		t.Fatalf("reloaded client host = %q, want prod API server", prod.Config.Host)
 	}
 }

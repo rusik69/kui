@@ -13,10 +13,11 @@ import (
 // ObjectCount is one resource kind's tally — used by both the sidebar-badge
 // endpoint and the Overview Objects panel, so the two never disagree.
 type ObjectCount struct {
-	Name    string `json:"-"` // registry short name, e.g. "pods" — join key for data-count-for, used as the map key not a field
-	Kind    string `json:"kind"`
-	Count   int    `json:"count"`
-	Failing bool   `json:"failing"` // true only for pods with at least one Failed-phase object
+	Name       string `json:"-"` // registry short name, e.g. "pods" — join key for data-count-for, used as the map key not a field
+	Kind       string `json:"kind"`
+	Count      int    `json:"count"`
+	Failing    bool   `json:"failing"` // true only for pods with at least one Failed-phase object
+	BarPercent int    `json:"-"`
 }
 
 const fanOutTimeout = 5 * time.Second
@@ -40,6 +41,18 @@ func countsFromFanOut(results []k8s.KindResult) []ObjectCount {
 			}
 		}
 		out = append(out, oc)
+	}
+
+	maxCount := 0
+	for _, oc := range out {
+		if oc.Count > maxCount {
+			maxCount = oc.Count
+		}
+	}
+	if maxCount > 0 {
+		for i := range out {
+			out[i].BarPercent = out[i].Count * 100 / maxCount
+		}
 	}
 	return out
 }

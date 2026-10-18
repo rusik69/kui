@@ -24,19 +24,26 @@ type PageData struct {
 	ListURL       string
 	WatchURL      string
 	BulkDeleteURL string
+	CSRFToken     string
 	ConnError     string // non-empty when the cluster was unreachable while building this page; shell still renders
 }
 
 // TableData backs the "table" fragment.
 type TableData struct {
-	Kind          string
-	Columns       []string
-	Rows          []Row
-	ShowNamespace bool
-	MetricsURL    string // set for pods/nodes when metrics-server may be available
-	RowsAreKinds  bool   // true for the "All resources" directory: rows navigate like sidebar links, not detail rows
-	Selectable    bool   // true when rows support bulk-select checkboxes (namespaced/cluster objects, not the kinds directory)
-	HasMetrics    bool   // true for pods/nodes: rows get a data-metric-key for client-side CPU/Mem patching
+	Kind              string
+	Columns           []string
+	Rows              []Row
+	ShowNamespace     bool
+	HeaderColumnCount int
+	MetricsURL        string // set for pods/nodes when metrics-server may be available
+	RowsAreKinds      bool   // true for the "All resources" directory: rows navigate like sidebar links, not detail rows
+	Selectable        bool   // true when rows support bulk-select checkboxes (namespaced/cluster objects, not the kinds directory)
+	HasMetrics        bool   // true for pods/nodes: rows get a data-metric-key for client-side CPU/Mem patching
+	LabelSelector     string
+	FieldSelector     string
+	PageSize          int64
+	NextContinue      string
+	NextPageURL       string
 }
 
 // Condition is one status condition shown in the Details tab.
@@ -126,6 +133,7 @@ type YAMLDiffData struct {
 // DebugShellData backs the "debugshell" fragment.
 type DebugShellData struct {
 	Pod, Namespace, ExecWSURLBase string
+	KillURL                       string // POST target for the kill button; empties the detail pane
 }
 
 // AttentionItem is one unhealthy pod shown in Overview's "Needs attention" list.

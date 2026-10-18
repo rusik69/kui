@@ -16,7 +16,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Unreachable")
 		return
 	}
-	pods, err := c.Clientset.CoreV1().Pods(nsOrAll(ns)).List(r.Context(), metav1.ListOptions{})
+	// ResourceVersion "0": this endpoint polls every 3s, so the list is
+	// served from the API server's watch cache (possibly seconds stale) rather
+	// than reading etcd each time — right for a status indicator.
+	pods, err := c.Clientset.CoreV1().Pods(nsOrAll(ns)).List(r.Context(), metav1.ListOptions{ResourceVersion: "0"})
 	if err != nil {
 		fmt.Fprint(w, "Unreachable")
 		return

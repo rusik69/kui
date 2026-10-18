@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ type ForwardHandle struct {
 	RemotePort int
 	stopCh     chan struct{}
 	readyCh    chan struct{}
+	errCh      chan error // receives exactly one value: ForwardPorts' result
 }
 
 // ForwardManager owns all active port-forward sessions for a process.
@@ -54,6 +56,7 @@ func (m *ForwardManager) Start(c *Clients, namespace, pod string, localPort, rem
 		ID: id, Namespace: namespace, Pod: pod,
 		LocalPort: localPort, RemotePort: remotePort,
 		stopCh: make(chan struct{}), readyCh: make(chan struct{}),
+		errCh: make(chan error, 1),
 	}
 
 	fw, err := portforward.New(dialer, []string{fmt.Sprintf("%d:%d", localPort, remotePort)}, h.stopCh, h.readyCh, out, errOut)
@@ -61,21 +64,51 @@ func (m *ForwardManager) Start(c *Clients, namespace, pod string, localPort, rem
 		return nil, err
 	}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- fw.ForwardPorts() }()
+	go func() { h.errCh <- fw.ForwardPorts() }()
 
 	select {
 	case <-h.readyCh:
-	case err := <-errCh:
-		if err != nil {
-			return nil, err
+	case err := <-h.errCh:
+		// The tunnel died before it was ever ready (pod unreachable, API
+		// rejected the request, ...). ForwardPorts may report that as a nil
+		// error, which must not be read as "all is well".
+		if err == nil {
+			err = errors.New("port-forward tunnel ended before becoming ready")
 		}
+		return nil, err
 	}
 
 	m.mu.Lock()
 	m.live[id] = h
 	m.mu.Unlock()
+
+	// Reap the handle if the forwarder dies on its own (the pod restarts, the
+	// API connection drops, ...). Without this a dead tunnel stays in the
+	// live map forever, and its Stop button keeps claiming a forward exists.
+	go m.reapOnDeath(h)
+
 	return h, nil
+}
+
+// reapOnDeath removes the handle from the live set once ForwardPorts returns,
+// i.e. the tunnel is gone.
+func (m *ForwardManager) reapOnDeath(h *ForwardHandle) {
+	<-h.errCh
+	m.mu.Lock()
+	if cur, ok := m.live[h.ID]; ok && cur == h {
+		delete(m.live, h.ID)
+	}
+	m.mu.Unlock()
+}
+
+// StopAll closes every active tunnel owned by the manager.
+func (m *ForwardManager) StopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, h := range m.live {
+		close(h.stopCh)
+		delete(m.live, id)
+	}
 }
 
 // Stop ends a running forward by id.

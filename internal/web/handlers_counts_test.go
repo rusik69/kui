@@ -63,13 +63,16 @@ func TestCountsFromFanOut(t *testing.T) {
 	if !pods.Failing {
 		t.Error("expected pods.Failing=true due to the CrashLoopBackOff pod")
 	}
+	if pods.BarPercent != 100 {
+		t.Errorf("pods.BarPercent = %d, want 100", pods.BarPercent)
+	}
 
 	svc, ok := byName["services"]
 	if !ok {
 		t.Fatal("expected a services entry")
 	}
-	if svc.Count != 0 || svc.Failing {
-		t.Errorf("expected services count=0 failing=false, got %+v", svc)
+	if svc.Count != 0 || svc.Failing || svc.BarPercent != 0 {
+		t.Errorf("expected services count=0 failing=false bar=0, got %+v", svc)
 	}
 
 	if _, ok := byName["configmaps"]; ok {

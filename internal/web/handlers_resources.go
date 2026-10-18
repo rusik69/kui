@@ -2,20 +2,48 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/yaml"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
 
+const (
+	maxYAMLFormBytes = 1 << 20
+	maxDiffFormBytes = 256 << 10
+	maxBulkFormBytes = 64 << 10
+)
+
+const defaultResourcePageSize int64 = 200
+const maxResourcePageSize int64 = 1000
+
+func parseFormLimit(w http.ResponseWriter, r *http.Request, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := r.ParseForm(); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return false
+	}
+	return true
+}
 func nsOrDash(ns string) string {
 	if ns == "" {
 		return "_"
@@ -87,10 +115,18 @@ func (s *Server) handleResourceList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	table, err := s.buildTableData(r.Context(), c, rk, ctxName, ns)
+	listOptions, err := parseResourceListOptions(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	table, err := s.buildTableData(r.Context(), c, rk, ctxName, ns, listOptions)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	if table.NextContinue != "" {
+		table.NextPageURL = resourceListURL(r.URL.Path, listOptions.LabelSelector, listOptions.FieldSelector, listOptions.Limit, table.NextContinue)
 	}
 
 	switch {
@@ -102,6 +138,7 @@ func (s *Server) handleResourceList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		data.ListURL = resourceListURL(r.URL.Path, listOptions.LabelSelector, listOptions.FieldSelector, listOptions.Limit, listOptions.Continue)
 		s.render(w, "content", data)
 	default:
 		data, err := s.buildPageData(r.Context(), ctxName, ns, resource)
@@ -109,12 +146,64 @@ func (s *Server) handleResourceList(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		data.ListURL = resourceListURL(r.URL.Path, listOptions.LabelSelector, listOptions.FieldSelector, listOptions.Limit, listOptions.Continue)
 		s.render(w, "page", data)
 	}
 }
 
-func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.ResourceKind, ctxName, ns string) (TableData, error) {
-	list, err := k8s.List(ctx, c, rk, ns)
+func parseResourceListOptions(query url.Values) (metav1.ListOptions, error) {
+	labelSelector, fieldSelector := query.Get("labelSelector"), query.Get("fieldSelector")
+	if _, err := labels.Parse(labelSelector); err != nil {
+		return metav1.ListOptions{}, fmt.Errorf("invalid label selector: %w", err)
+	}
+	if _, err := fields.ParseSelector(fieldSelector); err != nil {
+		return metav1.ListOptions{}, fmt.Errorf("invalid field selector: %w", err)
+	}
+	limit := defaultResourcePageSize
+	if rawLimit := query.Get("limit"); rawLimit != "" {
+		parsed, err := strconv.ParseInt(rawLimit, 10, 64)
+		if err != nil || parsed < 1 || parsed > maxResourcePageSize {
+			return metav1.ListOptions{}, fmt.Errorf("limit must be between 1 and %d", maxResourcePageSize)
+		}
+		limit = parsed
+	}
+	return metav1.ListOptions{
+		LabelSelector: labelSelector,
+		FieldSelector: fieldSelector,
+		Limit:         limit,
+		Continue:      query.Get("continue"),
+	}, nil
+}
+
+func resourceListURL(path, labelSelector, fieldSelector string, limit int64, continueToken string) string {
+	query := make(url.Values)
+	query.Set("frame", "table")
+	query.Set("limit", strconv.FormatInt(limit, 10))
+	if labelSelector != "" {
+		query.Set("labelSelector", labelSelector)
+	}
+	if fieldSelector != "" {
+		query.Set("fieldSelector", fieldSelector)
+	}
+	if continueToken != "" {
+		query.Set("continue", continueToken)
+	}
+	return path + "?" + query.Encode()
+}
+
+func tableHeaderColumnCount(columns []string, showNamespace, selectable bool) int {
+	count := len(columns)
+	if showNamespace {
+		count++
+	}
+	if selectable {
+		count++
+	}
+	return count
+}
+
+func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.ResourceKind, ctxName, ns string, options metav1.ListOptions) (TableData, error) {
+	list, err := k8s.ListWithOptions(ctx, c, rk, ns, options)
 	if err != nil {
 		return TableData{}, err
 	}
@@ -150,13 +239,18 @@ func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.Reso
 	}
 
 	return TableData{
-		Kind:          rk.Kind,
-		Columns:       columns,
-		Rows:          rows,
-		ShowNamespace: showNS,
-		MetricsURL:    metricsURL,
-		Selectable:    true,
-		HasMetrics:    hasMetrics,
+		Kind:              rk.Kind,
+		Columns:           columns,
+		Rows:              rows,
+		ShowNamespace:     showNS,
+		HeaderColumnCount: tableHeaderColumnCount(columns, showNS, true),
+		MetricsURL:        metricsURL,
+		Selectable:        true,
+		HasMetrics:        hasMetrics,
+		LabelSelector:     options.LabelSelector,
+		FieldSelector:     options.FieldSelector,
+		PageSize:          options.Limit,
+		NextContinue:      list.GetContinue(),
 	}, nil
 }
 
@@ -166,7 +260,7 @@ func (s *Server) renderAllResourcesDirectory(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	table := TableData{Kind: "All resources", Columns: []string{"Kind", "Namespaced"}, RowsAreKinds: true}
+	table := TableData{Kind: "All resources", Columns: []string{"Kind", "Namespaced"}, HeaderColumnCount: 2, RowsAreKinds: true}
 	for _, rk := range kinds {
 		table.Rows = append(table.Rows, Row{
 			Name:      rk.Kind,
@@ -395,8 +489,7 @@ func (s *Server) buildDetailData(ctx context.Context, c *k8s.Clients, rk k8s.Res
 
 func (s *Server) handleYAMLApply(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns, resource, name := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("resource"), r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !parseFormLimit(w, r, maxYAMLFormBytes) {
 		return
 	}
 	rawYAML := r.FormValue("yaml")
@@ -425,6 +518,10 @@ func (s *Server) handleYAMLApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateYAMLIdentity(obj, rk, ns, name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	ri := c.Dynamic.Resource(rk.GVR)
 	var updateErr error
 	if rk.Namespaced {
@@ -441,6 +538,21 @@ func (s *Server) handleYAMLApply(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `<span class="dot dot-green"></span> applied`)
 }
 
+func validateYAMLIdentity(obj *unstructured.Unstructured, rk k8s.ResourceKind, namespace, name string) error {
+	if obj.GetKind() != rk.Kind {
+		return fmt.Errorf("manifest kind %q does not match resource kind %q", obj.GetKind(), rk.Kind)
+	}
+	if obj.GetName() != name {
+		return fmt.Errorf("manifest name %q does not match resource name %q", obj.GetName(), name)
+	}
+	if rk.Namespaced && obj.GetNamespace() != namespace {
+		return fmt.Errorf("manifest namespace %q does not match resource namespace %q", obj.GetNamespace(), namespace)
+	}
+	if !rk.Namespaced && obj.GetNamespace() != "" {
+		return fmt.Errorf("cluster-scoped resource manifest must not set a namespace")
+	}
+	return nil
+}
 func (s *Server) handleResourceDelete(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns, resource, name := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("resource"), r.PathValue("name")
 
@@ -455,16 +567,15 @@ func (s *Server) handleResourceDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	verb := "deleted"
+	action, verb := "Delete", "deleted"
 	if rk.Name == "pods" && r.URL.Query().Get("evict") == "true" {
 		err = k8s.Evict(r.Context(), c, ns, name)
-		verb = "evicted"
+		action, verb = "Evict", "evicted"
 	} else {
 		err = k8s.Delete(r.Context(), c, rk, ns, name)
 	}
 	if err != nil {
-		triggerToast(w, "error", err.Error())
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("%s %s %q failed: %v", action, rk.Kind, name, err), http.StatusBadGateway)
 		return
 	}
 	triggerToast(w, "success", fmt.Sprintf("%s %q %s", rk.Kind, name, verb))
@@ -472,8 +583,7 @@ func (s *Server) handleResourceDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleYAMLDiff(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns, resource, name := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("resource"), r.PathValue("name")
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !parseFormLimit(w, r, maxDiffFormBytes) {
 		return
 	}
 
@@ -498,15 +608,44 @@ func (s *Server) handleYAMLDiff(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-
+	if changed {
+		obj := &unstructured.Unstructured{}
+		jsonBytes, err := yaml.YAMLToJSON([]byte(edited))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := obj.UnmarshalJSON(jsonBytes); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := validateYAMLIdentity(obj, rk, ns, name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		opts := metav1.UpdateOptions{DryRun: []string{metav1.DryRunAll}}
+		ri := c.Dynamic.Resource(rk.GVR)
+		if rk.Namespaced {
+			_, err = ri.Namespace(ns).Update(r.Context(), obj, opts)
+		} else {
+			_, err = ri.Update(r.Context(), obj, opts)
+		}
+		if err != nil {
+			status := http.StatusBadGateway
+			if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+				status = http.StatusUnprocessableEntity
+			}
+			http.Error(w, "server-side dry-run failed: "+err.Error(), status)
+			return
+		}
+	}
 	applyURL := resourcePath(ctxName, ns, rk.Name, name) + "/yaml"
 	s.render(w, "yamldiff", YAMLDiffData{Lines: lines, Changed: changed, ApplyURL: applyURL, YAML: edited})
 }
 
 func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 	ctxName := r.PathValue("ctx")
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if !parseFormLimit(w, r, maxBulkFormBytes) {
 		return
 	}
 
@@ -551,9 +690,17 @@ func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 // "/c/{ctx}/{ns}/{resource}/{name}" back into its parts, verifying it
 // belongs to the given encoded context id.
 func parseResourcePath(ctxID, path string) (ns, resource, name string, ok bool) {
+	if path == "" || strings.ContainsAny(path, "?#") {
+		return "", "", "", false
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(parts) != 5 || parts[0] != "c" || parts[1] != ctxID {
 		return "", "", "", false
+	}
+	for _, part := range parts[2:] {
+		if part == "" || part == "." || part == ".." {
+			return "", "", "", false
+		}
 	}
 	return parts[2], parts[3], parts[4], true
 }

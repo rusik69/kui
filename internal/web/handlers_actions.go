@@ -1,16 +1,20 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/rusik69/kui/internal/k8s"
@@ -21,6 +25,11 @@ import (
 type wsReader struct {
 	conn *websocket.Conn
 	buf  []byte
+}
+
+func newWSReader(conn *websocket.Conn) *wsReader {
+	conn.SetReadLimit(maxExecMessageBytes)
+	return &wsReader{conn: conn}
 }
 
 func (r *wsReader) Read(p []byte) (int, error) {
@@ -36,9 +45,17 @@ func (r *wsReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-type wsWriter struct{ conn *websocket.Conn }
+type wsWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
 
 func (w *wsWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return 0, err
+	}
 	if err := w.conn.WriteMessage(websocket.TextMessage, p); err != nil {
 		return 0, err
 	}
@@ -66,7 +83,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	rw := &wsWriter{conn: conn}
-	rr := &wsReader{conn: conn}
+	rr := newWSReader(conn)
 	err = k8s.Exec(r.Context(), c, ns, name, k8s.ExecOptions{
 		Container: container,
 		Command:   []string{command},
@@ -76,7 +93,7 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 		TTY:       true,
 	})
 	if err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("\r\nexec error: "+err.Error()+"\r\n"))
+		_, _ = rw.Write([]byte("\r\nexec error: " + err.Error() + "\r\n"))
 	}
 }
 
@@ -89,40 +106,83 @@ func (s *Server) handleDebugShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	podName := fmt.Sprintf("kui-debug-%d", rand.Intn(1_000_000))
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: ns,
-			Labels:    map[string]string{"kui.dev/ephemeral": "true"},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{{
-				Name:    "shell",
-				Image:   "busybox:1.36",
-				Command: []string{"sleep", "86400"},
-			}},
-		},
+	// Retire finished debug pods without disrupting sessions in other tabs.
+	if err := k8s.CleanupEphemeralDebugPods(r.Context(), c, ns); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
 	}
+
+	podName := fmt.Sprintf("kui-debug-%d", rand.IntN(1_000_000))
+	pod := k8s.DebugPodShellSpec(podName, ns, s.debugImage)
 	if _, err := c.Clientset.CoreV1().Pods(ns).Create(r.Context(), pod, metav1.CreateOptions{}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		p, err := c.Clientset.CoreV1().Pods(ns).Get(r.Context(), podName, metav1.GetOptions{})
-		if err == nil && p.Status.Phase == corev1.PodRunning {
-			break
+	if err := waitForDebugPod(r.Context(), func(ctx context.Context) (*corev1.Pod, error) {
+		return c.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
+	}); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = c.Clientset.CoreV1().Pods(ns).Delete(cleanupCtx, podName, metav1.DeleteOptions{})
+		if errors.Is(err, context.Canceled) {
+			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		status := http.StatusBadGateway
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		http.Error(w, "debug pod did not become ready: "+err.Error(), status)
+		return
 	}
 
 	s.render(w, "debugshell", DebugShellData{
 		Pod: podName, Namespace: ns,
 		ExecWSURLBase: fmt.Sprintf("/c/%s/%s/pods/%s/exec", ctxName, ns, podName),
+		KillURL:       fmt.Sprintf("/c/%s/%s/debug-shell/%s/kill", ctxName, ns, podName),
 	})
+}
+func waitForDebugPod(ctx context.Context, get func(context.Context) (*corev1.Pod, error)) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		pod, err := get(ctx)
+		if err == nil && pod.Status.Phase == corev1.PodRunning {
+			return nil
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// handleDebugShellKill terminates a kui ephemeral debug pod. The shell
+// container is a plain sleep, so a hard delete works; the label check in
+// KillDebugPod keeps this from ever touching a non-kui pod.
+func (s *Server) handleDebugShellKill(w http.ResponseWriter, r *http.Request) {
+	ctxName, ns, pod := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("pod")
+
+	c, err := s.clients(ctxName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := k8s.KillDebugPod(r.Context(), c, ns, pod); err != nil {
+		triggerToast(w, "error", err.Error())
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	triggerToast(w, "success", fmt.Sprintf("debug pod %q killed", pod))
+	// Intentionally empty body: swapping it into #detail-pane leaves an empty
+	// pane, and app.js's afterSwap handler closes an emptied detail pane.
 }
 
 func (s *Server) handlePortForwardStart(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +197,6 @@ func (s *Server) handlePortForwardStart(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
-
 	c, err := s.clients(ctxName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -161,7 +220,15 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (s *Server) handlePortForwardStop(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.forwards.Stop(id)
+	// Stop reports false when the tunnel is already gone (it died on its own
+	// and was reaped, or was stopped before): say so instead of claiming a
+	// forward was stopped that no longer exists.
+	if s.forwards.Stop(id) {
+		triggerToast(w, "success", "port-forward stopped")
+		_, _ = w.Write([]byte("stopped"))
+		return
+	}
+	triggerToast(w, "success", "port-forward no longer running")
 	_, _ = w.Write([]byte("stopped"))
 }
 
@@ -189,10 +256,15 @@ func (s *Server) handleMetricsPods(w http.ResponseWriter, r *http.Request) {
 	ns := r.URL.Query().Get("ns")
 	c, err := s.clients(ctxName)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	list, ok := k8s.PodMetrics(r.Context(), c, ns)
-	if !ok || len(list.Items) == 0 {
+	list, ok, err := k8s.PodMetrics(r.Context(), c, ns)
+	if err != nil {
+		http.Error(w, "pod metrics request failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ok || list == nil || len(list.Items) == 0 {
 		return
 	}
 	totalCPU, totalMem := int64(0), int64(0)
@@ -215,10 +287,15 @@ func (s *Server) handleMetricsNodes(w http.ResponseWriter, r *http.Request) {
 	ctxName := r.PathValue("ctx")
 	c, err := s.clients(ctxName)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	list, ok := k8s.NodeMetrics(r.Context(), c)
-	if !ok || len(list.Items) == 0 {
+	list, ok, err := k8s.NodeMetrics(r.Context(), c)
+	if err != nil {
+		http.Error(w, "node metrics request failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if !ok || list == nil || len(list.Items) == 0 {
 		return
 	}
 	totalCPU, totalMem := int64(0), int64(0)

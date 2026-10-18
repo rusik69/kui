@@ -12,61 +12,273 @@ window.kui = (function () {
 		return proto + "//" + location.host + path;
 	}
 
-	function startLogs(base) {
+	let logSocket = null;
+	let logPaused = false;
+	let logBuffer = "";
+	let terminalSession = null;
+	const maxLogLines = 5000;
+
+	function setStreamStatus(id, text) {
+		const status = document.getElementById(id);
+		if (status) status.textContent = text;
+	}
+
+	function closeLogStream() {
+		if (logSocket) {
+			logSocket.onopen = null;
+			logSocket.onmessage = null;
+			logSocket.onerror = null;
+			logSocket.onclose = null;
+			logSocket.close();
+			logSocket = null;
+		}
+		setStreamStatus("log-status", "Disconnected");
+		const pause = document.getElementById("log-pause");
+		if (pause) {
+			pause.disabled = true;
+			pause.textContent = "Pause";
+			pause.setAttribute("aria-pressed", "false");
+		}
+	}
+
+	function renderLogBuffer() {
 		const pane = document.getElementById("logs-pane");
 		if (!pane) return;
-		pane.textContent = "";
-		const container = document.getElementById("log-container");
-		const qs = container && container.value ? "?container=" + encodeURIComponent(container.value) : "";
-		const ws = new WebSocket(wsURL(base + qs));
+		const filter = (document.getElementById("log-filter")?.value || "").toLowerCase();
+		const lines = logBuffer.split("\n");
+		pane.textContent = filter ? lines.filter((line) => line.toLowerCase().includes(filter)).join("\n") : logBuffer;
+		pane.scrollTop = pane.scrollHeight;
+	}
+
+	function startLogs(base) {
+		disposeTerminal();
+		closeLogStream();
+		const pane = document.getElementById("logs-pane");
+		if (!pane) return;
+		logBuffer = "";
+		logPaused = false;
+		renderLogBuffer();
+		const params = new URLSearchParams();
+		const container = document.getElementById("log-container")?.value || "";
+		const tailInput = document.getElementById("log-tail-lines");
+		const parsedTail = Number.parseInt(tailInput?.value || "500", 10);
+		const tailLines = Number.isFinite(parsedTail) ? Math.max(1, Math.min(parsedTail, maxLogLines)) : 500;
+		if (tailInput) tailInput.value = String(tailLines);
+		if (container) params.set("container", container);
+		params.set("tailLines", String(tailLines));
+		const ws = new WebSocket(wsURL(base + "?" + params.toString()));
+		logSocket = ws;
+		const pause = document.getElementById("log-pause");
+		if (pause) pause.disabled = false;
+		ws.onopen = () => setStreamStatus("log-status", "Connected · " + (container || "default container"));
 		ws.onmessage = (ev) => {
-			pane.textContent += ev.data;
-			pane.scrollTop = pane.scrollHeight;
+			if (logPaused) return;
+			logBuffer += ev.data;
+			const lines = logBuffer.split("\n");
+			if (lines.length > maxLogLines) logBuffer = lines.slice(-maxLogLines).join("\n");
+			renderLogBuffer();
 		};
-		ws.onerror = () => {
-			pane.textContent += "\n[log stream error]";
+		ws.onerror = () => setStreamStatus("log-status", "Connection error");
+		ws.onclose = () => {
+			if (logSocket === ws) {
+				logSocket = null;
+				setStreamStatus("log-status", "Disconnected");
+				if (pause) pause.disabled = true;
+			}
 		};
 	}
 
+	function toggleLogs() {
+		if (!logSocket) return;
+		logPaused = !logPaused;
+		const button = document.getElementById("log-pause");
+		if (button) {
+			button.textContent = logPaused ? "Resume" : "Pause";
+			button.setAttribute("aria-pressed", String(logPaused));
+		}
+		setStreamStatus("log-status", logPaused ? "Paused" : "Connected");
+	}
+
+	function clearLogs() {
+		logBuffer = "";
+		renderLogBuffer();
+	}
+
+	function filterLogs() {
+		renderLogBuffer();
+	}
+
+	function disposeTerminal() {
+		const session = terminalSession;
+		if (!session) return;
+		if (session.observer) session.observer.disconnect();
+		window.removeEventListener("resize", session.resize);
+		session.ws.onopen = null;
+		session.ws.onmessage = null;
+		session.ws.onerror = null;
+		session.ws.onclose = null;
+		session.ws.close();
+		session.term.dispose();
+		terminalSession = null;
+		setStreamStatus("shell-status", "Disconnected");
+	}
+
+	function disposeStreams() {
+		closeLogStream();
+		disposeTerminal();
+	}
+
 	function startShell(base) {
+		closeLogStream();
+		disposeTerminal();
 		const pane = document.getElementById("term-pane");
 		if (!pane) return;
 		pane.innerHTML = "";
-		const containerSel = document.getElementById("shell-container");
-		const qs = containerSel && containerSel.value ? "?container=" + encodeURIComponent(containerSel.value) : "";
+		const container = document.getElementById("shell-container")?.value || "";
+		const params = new URLSearchParams();
+		if (container) params.set("container", container);
 
 		const term = new Terminal({ fontSize: 13, theme: { background: "#000000" } });
 		const fit = new FitAddon.FitAddon();
 		term.loadAddon(fit);
 		term.open(pane);
-		fit.fit();
+		const resize = () => fit.fit();
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+		if (observer) observer.observe(pane);
+		window.addEventListener("resize", resize);
+		requestAnimationFrame(resize);
 
-		const ws = new WebSocket(wsURL(base + qs));
-		ws.onopen = () => term.focus();
+		const ws = new WebSocket(wsURL(base + (params.size ? "?" + params.toString() : "")));
+		const session = { term, ws, observer, resize };
+		terminalSession = session;
+		ws.onopen = () => {
+			if (terminalSession !== session) return;
+			setStreamStatus("shell-status", "Connected · " + (container || "default container"));
+			term.focus();
+		};
 		ws.onmessage = (ev) => term.write(ev.data);
-		ws.onclose = () => term.write("\r\n[connection closed]");
+		ws.onerror = () => {
+			setStreamStatus("shell-status", "Connection error");
+			term.write("\r\n[connection error]");
+		};
+		ws.onclose = () => {
+			if (terminalSession === session) setStreamStatus("shell-status", "Disconnected");
+			term.write("\r\n[connection closed]");
+		};
 		term.onData((data) => {
 			if (ws.readyState === WebSocket.OPEN) ws.send(data);
 		});
 	}
 
+	function copyTerminalSelection() {
+		if (!terminalSession) return;
+		const selection = terminalSession.term.getSelection();
+		if (selection) copyText(selection);
+	}
+
+	function clearTerminal() {
+		if (terminalSession) terminalSession.term.write("\x1b[2J\x1b[3J\x1b[H");
+	}
+
 	function filterRows(value) {
 		const needle = value.toLowerCase();
-		document.querySelectorAll("#kui-table tbody tr").forEach((tr) => {
-			tr.style.display = tr.textContent.toLowerCase().includes(needle) ? "" : "none";
+		document.querySelectorAll("#kui-table").forEach((table) => {
+			const rows = Array.from(table.querySelectorAll("tbody tr[data-id]"));
+			let visible = 0;
+			rows.forEach((tr) => {
+				const matches = tr.textContent.toLowerCase().includes(needle);
+				tr.style.display = matches ? "" : "none";
+				if (matches) visible++;
+			});
+			const empty = table.querySelector("[data-filter-empty]");
+			if (empty) empty.style.display = needle && rows.length > 0 && visible === 0 ? "" : "none";
 		});
+		const lp = findListPane(document);
+		if (lp) syncSelectAll(lp, selectedRowIDs(lp));
+		syncClientListStateURL();
+	}
+
+	function clearRowFilter() {
+		const input = document.getElementById("row-filter");
+		if (!input) return;
+		input.value = "";
+		filterRows("");
+		input.focus();
+	}
+
+	function selectedRowIDs(lp) {
+		return new Set((lp.dataset.checkedRows || "").split(",").filter(Boolean));
+	}
+
+	function syncSelectAll(lp, selected) {
+		const selectAll = lp.querySelector("#select-all-rows");
+		if (!selectAll) return;
+		const visible = Array.from(lp.querySelectorAll(".row-select")).filter((cb) => cb.closest("tr").style.display !== "none");
+		const selectedVisible = visible.filter((cb) => selected.has(cb.dataset.id)).length;
+		selectAll.checked = visible.length > 0 && selectedVisible === visible.length;
+		selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
+		selectAll.disabled = visible.length === 0;
+	}
+
+	function setSelectedRows(lp, selected) {
+		lp.dataset.checkedRows = Array.from(selected).join(",");
+		lp.querySelectorAll(".row-select").forEach((cb) => {
+			cb.checked = selected.has(cb.dataset.id);
+		});
+		syncSelectAll(lp, selected);
+		updateBulkBar(lp);
 	}
 
 	// ---- detail pane open/close (Foundation) ----
 
-	function closeDetail() {
+	function clearDetailPane() {
 		const dp = document.getElementById("detail-pane");
 		if (!dp) return;
-		dp.innerHTML = "";
+		disposeStreams();
 		dp.classList.remove("open");
 		const splitter = document.getElementById("detail-splitter");
 		if (splitter) splitter.style.display = "none";
 		setBreadcrumbName("");
+	}
+
+	function closeDetail() {
+		if (hasUnsavedYAMLChanges()) {
+			showConfirmModal("Discard unsaved YAML changes?", clearDetailPane);
+			return;
+		}
+		clearDetailPane();
+	}
+
+	function updateYAMLDirtyState(editor) {
+		const original = editor.form && editor.form.querySelector('input[name="original"]');
+		const dirty = !!original && editor.value !== original.value;
+		const panel = editor.closest("#tab-yaml") || document;
+		const status = panel.querySelector("#yaml-dirty-status");
+		const review = editor.form && editor.form.querySelector('button[type="submit"]');
+		if (status) {
+			status.textContent = dirty ? "Unsaved changes" : "Saved";
+			status.classList.toggle("yaml-dirty", dirty);
+		}
+		if (review) review.disabled = !dirty;
+	}
+
+	function markYAMLEditorSaved() {
+		const editor = document.getElementById("yaml-editor");
+		if (!editor || !editor.form) return;
+		const original = editor.form.querySelector('input[name="original"]');
+		if (original) original.value = editor.value;
+		updateYAMLDirtyState(editor);
+	}
+
+	function syncYAMLDirtyState() {
+		const editor = document.getElementById("yaml-editor");
+		if (editor) updateYAMLDirtyState(editor);
+	}
+
+	function hasUnsavedYAMLChanges() {
+		const editor = document.getElementById("yaml-editor");
+		const original = editor && editor.form && editor.form.querySelector('input[name="original"]');
+		return !!original && editor.value !== original.value;
 	}
 
 	// ---- toasts (Foundation) ----
@@ -79,6 +291,64 @@ window.kui = (function () {
 		el.textContent = toast.message || "";
 		container.appendChild(el);
 		setTimeout(() => el.remove(), 4000);
+	}
+
+	function copyTextFallback(value) {
+		const field = document.createElement("textarea");
+		const previousFocus = document.activeElement;
+		field.value = value;
+		field.readOnly = true;
+		field.tabIndex = -1;
+		field.style.position = "fixed";
+		field.style.opacity = "0";
+		field.style.left = "-1000px";
+		document.body.appendChild(field);
+		field.select();
+		let copied = false;
+		try {
+			copied = document.execCommand("copy");
+		} finally {
+			field.remove();
+			if (previousFocus && typeof previousFocus.focus === "function") previousFocus.focus();
+		}
+		return copied;
+	}
+
+	async function copyText(value) {
+		let copied = false;
+		if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+			try {
+				await navigator.clipboard.writeText(value);
+				copied = true;
+			} catch {
+				// Fall back for browsers that deny the async Clipboard API.
+			}
+		}
+		if (!copied) {
+			try {
+				copied = copyTextFallback(value);
+			} catch {
+				copied = false;
+			}
+		}
+		showToast(copied
+			? { level: "success", message: "Copied to clipboard" }
+			: { level: "error", message: "Could not copy to clipboard" });
+	}
+
+	function downloadYAML(filename) {
+		const editor = document.getElementById("yaml-editor");
+		if (!editor) return;
+		const blob = new Blob([editor.value], { type: "application/yaml;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = filename && !/[\\/]/.test(filename) ? filename : "resource.yaml";
+		link.hidden = true;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	}
 
 	// ---- breadcrumb (Phase 4) ----
@@ -131,12 +401,172 @@ window.kui = (function () {
 		applyActiveResource(resource, link ? link.dataset.label : resource);
 	}
 
+	function filterNamespaceOptions(value) {
+		const select = document.getElementById("namespace-select");
+		if (!select) return;
+		const needle = (value || "").trim().toLowerCase();
+		Array.from(select.options).forEach((option) => {
+			option.hidden = option.value !== "_all" && !option.selected &&
+				!option.textContent.toLowerCase().includes(needle);
+		});
+	}
 	function changeNamespace(ns) {
 		const ctx = document.body.dataset.ctx;
 		const activeLink = document.querySelector(".sidebar-link.active");
 		const resource = activeLink ? activeLink.dataset.resource : "overview";
-		location.href = "/c/" + ctx + "/" + ns + "/" + resource;
+		syncClientListStateURL();
+		const current = new URL(location.href);
+		const target = new URL("/c/" + ctx + "/" + ns + "/" + resource, location.origin);
+		["labelSelector", "fieldSelector", "limit", "rowFilter", "sortColumn", "sortDir"].forEach((key) => {
+			if (current.searchParams.has(key)) target.searchParams.set(key, current.searchParams.get(key));
+		});
+		location.href = target.pathname + target.search;
 	}
+
+	function syncClientListStateURL() {
+		const url = new URL(location.href);
+		const filterInput = document.getElementById("row-filter");
+		const filter = filterInput ? filterInput.value : "";
+		if (filter) url.searchParams.set("rowFilter", filter);
+		else url.searchParams.delete("rowFilter");
+		const lp = findListPane(document);
+		if (lp && lp.dataset.sortKey) {
+			url.searchParams.set("sortColumn", lp.dataset.sortKey);
+			url.searchParams.set("sortDir", lp.dataset.sortDir || "asc");
+		} else {
+			url.searchParams.delete("sortColumn");
+			url.searchParams.delete("sortDir");
+		}
+		history.replaceState(history.state, "", url.pathname + url.search);
+	}
+
+	function restoreClientListState() {
+		const params = new URLSearchParams(location.search);
+		const filterInput = document.getElementById("row-filter");
+		if (filterInput) filterInput.value = params.get("rowFilter") || "";
+		const lp = findListPane(document);
+		if (!lp) return;
+		lp.dataset.sortKey = params.get("sortColumn") || "";
+		lp.dataset.sortDir = params.get("sortDir") === "desc" ? "desc" : "asc";
+	}
+
+	function applyResourceSelectors() {
+		const lp = findListPane(document);
+		const labelInput = document.getElementById("label-selector");
+		const fieldInput = document.getElementById("field-selector");
+		if (!lp || !labelInput || !fieldInput || !window.htmx) return;
+		const listURL = new URL(lp.dataset.listUrl || location.href, location.origin);
+		copyClientListState(new URL(location.href), listURL);
+		listURL.searchParams.delete("frame");
+		listURL.searchParams.delete("labelSelector");
+		listURL.searchParams.delete("fieldSelector");
+		listURL.searchParams.delete("continue");
+		if (labelInput.value.trim()) listURL.searchParams.set("labelSelector", labelInput.value.trim());
+		if (fieldInput.value.trim()) listURL.searchParams.set("fieldSelector", fieldInput.value.trim());
+		lp.dataset.pageHistory = "[]";
+		const pageURL = new URL(listURL);
+		listURL.searchParams.set("frame", "table");
+		lp.dataset.listUrl = listURL.toString();
+		lp.setAttribute("hx-get", listURL.toString());
+		history.replaceState(history.state, "", pageURL.pathname + pageURL.search);
+		window.htmx.ajax("GET", listURL.toString(), { target: lp, swap: "innerHTML" });
+	}
+
+	function loadResourcePage(rawURL) {
+		const lp = findListPane(document);
+		if (!lp || !window.htmx) return;
+		const listURL = new URL(rawURL, location.origin);
+		copyClientListState(new URL(location.href), listURL);
+		const pageURL = new URL(listURL);
+		pageURL.searchParams.delete("frame");
+		lp.dataset.listUrl = listURL.toString();
+		lp.setAttribute("hx-get", listURL.toString());
+		history.replaceState(history.state, "", pageURL.pathname + pageURL.search);
+		window.htmx.ajax("GET", listURL.toString(), { target: lp, swap: "innerHTML" });
+	}
+
+	function readPageHistory(lp) {
+		try {
+			return JSON.parse(lp.dataset.pageHistory || "[]");
+		} catch {
+			return [];
+		}
+	}
+
+	function nextResourcePage(rawURL) {
+		const lp = findListPane(document);
+		if (!lp) return;
+		const current = new URL(lp.dataset.listUrl || location.href, location.origin);
+		copyClientListState(new URL(location.href), current);
+		current.searchParams.delete("frame");
+		const pages = readPageHistory(lp);
+		pages.push(current.pathname + current.search);
+		lp.dataset.pageHistory = JSON.stringify(pages);
+		loadResourcePage(rawURL);
+	}
+
+	function previousResourcePage() {
+		const lp = findListPane(document);
+		if (!lp) return;
+		const pages = readPageHistory(lp);
+		const previous = pages.pop();
+		if (!previous) return;
+		lp.dataset.pageHistory = JSON.stringify(pages);
+		loadResourcePage(previous);
+	}
+
+	function changeResourcePageSize(value) {
+		const lp = findListPane(document);
+		const limit = Number.parseInt(value, 10);
+		if (!lp || !Number.isInteger(limit) || limit < 1 || limit > 1000) return;
+		const listURL = new URL(lp.dataset.listUrl || location.href, location.origin);
+		listURL.searchParams.delete("frame");
+		listURL.searchParams.delete("continue");
+		listURL.searchParams.set("limit", String(limit));
+		lp.dataset.pageHistory = "[]";
+		loadResourcePage(listURL.toString());
+	}
+
+	function syncPagination(lp) {
+		const previous = lp.querySelector("#previous-page");
+		if (previous) previous.disabled = readPageHistory(lp).length === 0;
+	}
+
+	function copyClientListState(source, target) {
+		["rowFilter", "sortColumn", "sortDir"].forEach((key) => {
+			if (source.searchParams.has(key)) target.searchParams.set(key, source.searchParams.get(key));
+		});
+	}
+
+	function setRowDensity(value) {
+		if (!["default", "compact", "comfortable"].includes(value)) return;
+		document.body.dataset.rowDensity = value;
+		try {
+			localStorage.setItem("kui-row-density", value);
+		} catch {
+			// Keep the current-session choice even when storage is unavailable.
+		}
+		syncRowDensityControl();
+	}
+
+	function restoreRowDensity() {
+		let density = "default";
+		try {
+			const saved = localStorage.getItem("kui-row-density");
+			if (["default", "compact", "comfortable"].includes(saved)) density = saved;
+		} catch {
+			// The default density remains usable without persistent storage.
+		}
+		document.body.dataset.rowDensity = density;
+		syncRowDensityControl();
+	}
+
+	function syncRowDensityControl() {
+		const control = document.getElementById("row-density");
+		if (control) control.value = document.body.dataset.rowDensity || "default";
+	}
+
+
 
 	// ---- row selection / sort / filter reconciliation (Phases 2, 3, 7) ----
 
@@ -162,13 +592,37 @@ window.kui = (function () {
 	function applySortAndSelection(lp) {
 		if (!lp) return;
 		const table = lp.querySelector("#kui-table");
+		if (table) {
+			const headers = Array.from(table.querySelectorAll("thead th[aria-sort]"));
+			let sortedHeader = null;
+			if (lp.dataset.sortKey) {
+				const index = headers.findIndex((th) => th.textContent.trim() === lp.dataset.sortKey);
+				if (index >= 0) {
+					sortedHeader = headers[index];
+					lp.dataset.sortCol = String(Array.from(sortedHeader.parentElement.children).indexOf(sortedHeader));
+				} else {
+					delete lp.dataset.sortCol;
+					delete lp.dataset.sortKey;
+					syncClientListStateURL();
+				}
+			}
+			headers.forEach((th) => {
+				th.classList.remove("sort-asc", "sort-desc");
+				th.setAttribute("aria-sort", "none");
+			});
+			if (sortedHeader) {
+				const descending = lp.dataset.sortDir === "desc";
+				sortedHeader.classList.add(descending ? "sort-desc" : "sort-asc");
+				sortedHeader.setAttribute("aria-sort", descending ? "descending" : "ascending");
+			}
+		}
 		const tbody = table && table.querySelector("tbody");
 		if (tbody) {
 			const sortCol = lp.dataset.sortCol;
 			if (sortCol !== undefined && sortCol !== "") {
 				const idx = parseInt(sortCol, 10);
 				const dir = lp.dataset.sortDir === "desc" ? -1 : 1;
-				const rows = Array.from(tbody.querySelectorAll("tr")).filter((tr) => tr.cells.length > idx);
+				const rows = Array.from(tbody.querySelectorAll("tr[data-id]")).filter((tr) => tr.cells.length > idx);
 				rows.sort((a, b) => {
 					const av = parseSortToken(a.cells[idx].textContent);
 					const bv = parseSortToken(b.cells[idx].textContent);
@@ -185,36 +639,50 @@ window.kui = (function () {
 				if (match) match.classList.add("selected");
 			}
 
-			const checked = (lp.dataset.checkedRows || "").split(",").filter(Boolean);
-			if (checked.length) {
-				tbody.querySelectorAll(".row-select").forEach((cb) => {
-					cb.checked = checked.includes(cb.dataset.id);
-				});
-			}
+			const checked = selectedRowIDs(lp);
+			tbody.querySelectorAll(".row-select").forEach((cb) => {
+				cb.checked = checked.has(cb.dataset.id);
+			});
+			syncSelectAll(lp, checked);
 			updateBulkBar(lp);
 		}
 
 		const filterInput = document.getElementById("row-filter");
 		if (filterInput && filterInput.value) filterRows(filterInput.value);
+		syncPagination(lp);
+		syncRowDensityControl();
 	}
 
 	function cssEscape(s) {
 		return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 	}
 
+	function sortTableColumn(th) {
+		if (!th.textContent.trim()) return;
+		const lp = th.closest(".list-pane");
+		if (!lp) return;
+		const row = th.parentElement;
+		const idx = Array.from(row.children).indexOf(th);
+		const current = lp.dataset.sortCol === String(idx);
+		lp.dataset.sortCol = String(idx);
+		lp.dataset.sortKey = th.textContent.trim();
+		lp.dataset.sortDir = current && lp.dataset.sortDir === "asc" ? "desc" : "asc";
+		syncClientListStateURL();
+		applySortAndSelection(lp);
+	}
+
+	function onTableKeydown(e) {
+		if (e.key !== "Enter" && e.key !== " ") return;
+		const th = e.target.closest("#kui-table thead th[tabindex='0']");
+		if (!th) return;
+		e.preventDefault();
+		sortTableColumn(th);
+	}
+
 	function onTableClick(e) {
 		const th = e.target.closest("#kui-table thead th");
 		if (th) {
-			const lp = th.closest(".list-pane");
-			if (!lp) return;
-			const row = th.parentElement;
-			const idx = Array.from(row.children).indexOf(th);
-			const current = lp.dataset.sortCol === String(idx);
-			lp.dataset.sortCol = String(idx);
-			lp.dataset.sortDir = current && lp.dataset.sortDir === "asc" ? "desc" : "asc";
-			row.querySelectorAll("th").forEach((h) => h.classList.remove("sort-asc", "sort-desc"));
-			th.classList.add(lp.dataset.sortDir === "desc" ? "sort-desc" : "sort-asc");
-			applySortAndSelection(lp);
+			sortTableColumn(th);
 			return;
 		}
 
@@ -249,32 +717,29 @@ window.kui = (function () {
 		if (cb) {
 			const lp = cb.closest(".list-pane");
 			if (!lp) return;
-			const ids = new Set((lp.dataset.checkedRows || "").split(",").filter(Boolean));
-			if (cb.checked) ids.add(cb.dataset.id);
-			else ids.delete(cb.dataset.id);
-			lp.dataset.checkedRows = Array.from(ids).join(",");
-			updateBulkBar(lp);
+			const selected = selectedRowIDs(lp);
+			if (cb.checked) selected.add(cb.dataset.id);
+			else selected.delete(cb.dataset.id);
+			setSelectedRows(lp, selected);
 			return;
 		}
 		const selectAll = e.target.closest("#select-all-rows");
 		if (selectAll) {
 			const lp = selectAll.closest(".list-pane");
 			if (!lp) return;
+			const selected = selectedRowIDs(lp);
 			const visible = Array.from(lp.querySelectorAll(".row-select")).filter((c) => c.closest("tr").style.display !== "none");
-			visible.forEach((c) => (c.checked = selectAll.checked));
-			lp.dataset.checkedRows = selectAll.checked ? visible.map((c) => c.dataset.id).join(",") : "";
-			updateBulkBar(lp);
+			visible.forEach((cb) => {
+				if (selectAll.checked) selected.add(cb.dataset.id);
+				else selected.delete(cb.dataset.id);
+			});
+			setSelectedRows(lp, selected);
 		}
 	}
 
 	function clearSelection() {
 		const lp = findListPane(document);
-		if (!lp) return;
-		lp.dataset.checkedRows = "";
-		lp.querySelectorAll(".row-select").forEach((c) => (c.checked = false));
-		const selectAll = lp.querySelector("#select-all-rows");
-		if (selectAll) selectAll.checked = false;
-		updateBulkBar(lp);
+		if (lp) setSelectedRows(lp, new Set());
 	}
 
 	function bulkDelete() {
@@ -319,51 +784,150 @@ window.kui = (function () {
 
 	// ---- command palette (⌘K) ----
 
+	let palettePreviousFocus = null;
+	const recentPaletteKey = "kui.recentResources";
+
 	function isPaletteOpen() {
 		const overlay = document.getElementById("palette-overlay");
 		return overlay && overlay.style.display !== "none";
+	}
+	function isConfirmOpen() {
+		const overlay = document.getElementById("confirm-overlay");
+		return overlay && overlay.style.display !== "none";
+	}
+
+	function setBackgroundInert(inert) {
+		[".app", "#statusbar"].forEach((selector) => {
+			const element = document.querySelector(selector);
+			if (element) element.inert = inert;
+		});
+	}
+
+	let confirmPreviousFocus = null;
+
+	function syncPaletteOptions() {
+		const items = Array.from(document.querySelectorAll("#palette-results .palette-result"));
+		const input = document.getElementById("palette-input");
+		let active = null;
+		items.forEach((item, index) => {
+			item.id = "palette-option-" + index;
+			item.setAttribute("role", "option");
+			item.setAttribute("aria-selected", String(item.classList.contains("active")));
+			item.tabIndex = -1;
+			if (item.classList.contains("active")) active = item;
+		});
+		if (input) {
+			if (active) input.setAttribute("aria-activedescendant", active.id);
+			else input.removeAttribute("aria-activedescendant");
+		}
+	}
+
+	function recentPaletteItems() {
+		try {
+			const items = JSON.parse(localStorage.getItem(recentPaletteKey) || "[]");
+			return Array.isArray(items) ? items.filter((item) =>
+				item && typeof item.url === "string" && item.url.startsWith("/c/") &&
+				typeof item.label === "string" && item.label.length <= 200
+			).slice(0, 8) : [];
+		} catch {
+			return [];
+		}
+	}
+
+	function recordRecent(url, label, fullNav) {
+		if (typeof url !== "string" || !url.startsWith("/c/") ||
+			typeof label !== "string" || label.length > 200) return;
+		const items = recentPaletteItems().filter((item) => item.url !== url);
+		items.unshift({ url, label, fullNav: Boolean(fullNav) });
+		try {
+			localStorage.setItem(recentPaletteKey, JSON.stringify(items.slice(0, 8)));
+		} catch {
+			// Recent navigation is optional when storage is unavailable.
+		}
+	}
+
+	function renderRecentPalette() {
+		const results = document.getElementById("palette-results");
+		if (!results) return;
+		const recent = recentPaletteItems();
+		results.replaceChildren();
+		if (!recent.length) {
+			results.innerHTML = '<div class="empty-state" role="status">Type to search…</div>';
+			return;
+		}
+		const group = document.createElement("div");
+		group.className = "palette-group";
+		group.setAttribute("role", "group");
+		group.setAttribute("aria-label", "Recent");
+		const title = document.createElement("div");
+		title.className = "section-title";
+		title.textContent = "Recent";
+		group.appendChild(title);
+		recent.forEach((item, index) => {
+			const entry = document.createElement("div");
+			entry.className = "palette-result" + (index === 0 ? " active" : "");
+			entry.textContent = item.label;
+			entry.dataset.recentUrl = item.url;
+			entry.dataset.recentLabel = item.label;
+			entry.setAttribute("role", "option");
+			entry.id = "palette-option-" + index;
+			entry.setAttribute("aria-selected", String(index === 0));
+			entry.tabIndex = -1;
+			if (item.fullNav) {
+				entry.addEventListener("click", () => {
+					recordRecent(item.url, item.label, true);
+					closePalette();
+					location.href = item.url;
+				});
+			} else {
+				entry.setAttribute("hx-get", item.url);
+				entry.setAttribute("hx-target", "#content");
+				entry.setAttribute("hx-swap", "innerHTML");
+				entry.setAttribute("hx-push-url", item.url);
+				entry.addEventListener("click", () => {
+					recordRecent(item.url, item.label, false);
+					closePalette();
+				});
+			}
+			group.appendChild(entry);
+		});
+		results.appendChild(group);
+		if (window.htmx) htmx.process(results);
+		syncPaletteOptions();
 	}
 
 	function openPalette() {
 		const overlay = document.getElementById("palette-overlay");
 		const input = document.getElementById("palette-input");
-		const results = document.getElementById("palette-results");
 		if (!overlay || !input) return;
+		if (isPaletteOpen()) {
+			input.focus();
+			return;
+		}
+		palettePreviousFocus = document.activeElement;
+		setBackgroundInert(true);
 		overlay.style.display = "flex";
+		overlay.setAttribute("aria-hidden", "false");
+		input.setAttribute("aria-expanded", "true");
 		input.value = "";
-		if (results) results.innerHTML = "";
+		renderRecentPalette();
 		input.focus();
 	}
 
 	function closePalette() {
 		const overlay = document.getElementById("palette-overlay");
-		if (overlay) overlay.style.display = "none";
-	}
-
-	// Replaces native hx-confirm's unstyled OS dialog — see the global
-	// htmx:confirm listener in the wiring section, which intercepts every
-	// hx-confirm-bearing element with no per-button changes needed.
-	function showConfirmModal(message, onConfirm) {
-		const overlay = document.getElementById("confirm-overlay");
-		const messageEl = document.getElementById("confirm-message");
-		const okBtn = document.getElementById("confirm-ok");
-		const cancelBtn = document.getElementById("confirm-cancel");
-		if (!overlay || !messageEl || !okBtn || !cancelBtn) {
-			onConfirm(); // fail open rather than silently blocking the action
-			return;
-		}
-		messageEl.textContent = message;
-		overlay.style.display = "flex";
-
-		const cleanup = () => {
+		const input = document.getElementById("palette-input");
+		if (overlay) {
 			overlay.style.display = "none";
-			okBtn.removeEventListener("click", onOk);
-			cancelBtn.removeEventListener("click", onCancel);
-		};
-		const onOk = () => { cleanup(); onConfirm(); };
-		const onCancel = () => cleanup();
-		okBtn.addEventListener("click", onOk);
-		cancelBtn.addEventListener("click", onCancel);
+			overlay.setAttribute("aria-hidden", "true");
+		}
+		if (input) {
+			input.setAttribute("aria-expanded", "false");
+			input.removeAttribute("aria-activedescendant");
+		}
+		setBackgroundInert(false);
+		if (palettePreviousFocus && palettePreviousFocus.isConnected) palettePreviousFocus.focus();
+		palettePreviousFocus = null;
 	}
 
 	function movePaletteSelection(key) {
@@ -380,7 +944,41 @@ window.kui = (function () {
 			idx = key === "ArrowDown" ? Math.min(idx + 1, items.length - 1) : Math.max(idx - 1, 0);
 		}
 		items[idx].classList.add("active");
+		syncPaletteOptions();
 		items[idx].scrollIntoView({ block: "nearest" });
+	}
+
+	// Replaces native hx-confirm's unstyled OS dialog.
+	function showConfirmModal(message, onConfirm) {
+		const overlay = document.getElementById("confirm-overlay");
+		const dialog = overlay && overlay.querySelector(".confirm-modal");
+		const messageEl = document.getElementById("confirm-message");
+		const okBtn = document.getElementById("confirm-ok");
+		const cancelBtn = document.getElementById("confirm-cancel");
+		if (!overlay || !dialog || !messageEl || !okBtn || !cancelBtn) {
+			onConfirm();
+			return;
+		}
+		confirmPreviousFocus = document.activeElement;
+		messageEl.textContent = message;
+		overlay.style.display = "flex";
+		overlay.setAttribute("aria-hidden", "false");
+		setBackgroundInert(true);
+		cancelBtn.focus();
+
+		const cleanup = () => {
+			overlay.style.display = "none";
+			overlay.setAttribute("aria-hidden", "true");
+			setBackgroundInert(false);
+			okBtn.removeEventListener("click", onOk);
+			cancelBtn.removeEventListener("click", onCancel);
+			if (confirmPreviousFocus && confirmPreviousFocus.isConnected) confirmPreviousFocus.focus();
+			confirmPreviousFocus = null;
+		};
+		const onOk = () => { cleanup(); onConfirm(); };
+		const onCancel = () => cleanup();
+		okBtn.addEventListener("click", onOk);
+		cancelBtn.addEventListener("click", onCancel);
 	}
 
 	// ---- resizable detail pane (Phase 2) ----
@@ -388,8 +986,17 @@ window.kui = (function () {
 	function initSplitter() {
 		const splitter = document.getElementById("detail-splitter");
 		if (!splitter) return;
-		const saved = localStorage.getItem("kui.detailPaneWidth");
-		if (saved) document.documentElement.style.setProperty("--detail-pane-w", saved + "px");
+		const minWidth = 280;
+		const maxWidth = 900;
+		const applyWidth = (width, save) => {
+			const next = Math.max(minWidth, Math.min(maxWidth, width));
+			document.documentElement.style.setProperty("--detail-pane-w", next + "px");
+			splitter.setAttribute("aria-valuenow", String(next));
+			if (save) localStorage.setItem("kui.detailPaneWidth", String(next));
+			return next;
+		};
+		const saved = Number.parseInt(localStorage.getItem("kui.detailPaneWidth"), 10);
+		applyWidth(Number.isFinite(saved) ? saved : 420);
 
 		let dragging = false;
 		let startX = 0;
@@ -400,17 +1007,24 @@ window.kui = (function () {
 			startWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
 			e.preventDefault();
 		});
+		splitter.addEventListener("keydown", (e) => {
+			const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
+			if (e.key === "ArrowLeft") applyWidth(current + 20, true);
+			else if (e.key === "ArrowRight") applyWidth(current - 20, true);
+			else if (e.key === "Home") applyWidth(minWidth, true);
+			else if (e.key === "End") applyWidth(maxWidth, true);
+			else return;
+			e.preventDefault();
+		});
 		document.addEventListener("mousemove", (e) => {
 			if (!dragging) return;
-			const delta = startX - e.clientX;
-			const newWidth = Math.max(280, Math.min(900, startWidth + delta));
-			document.documentElement.style.setProperty("--detail-pane-w", newWidth + "px");
+			applyWidth(startWidth + startX - e.clientX, false);
 		});
 		document.addEventListener("mouseup", () => {
 			if (!dragging) return;
 			dragging = false;
-			const w = getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w").trim();
-			localStorage.setItem("kui.detailPaneWidth", parseInt(w, 10));
+			const width = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
+			applyWidth(width, true);
 		});
 	}
 
@@ -467,8 +1081,33 @@ window.kui = (function () {
 
 	document.addEventListener("click", onTableClick);
 	document.addEventListener("change", onTableChange);
+	document.addEventListener("input", (e) => {
+		if (e.target && e.target.id === "yaml-editor") updateYAMLDirtyState(e.target);
+	});
+	window.addEventListener("beforeunload", (e) => {
+		if (!hasUnsavedYAMLChanges()) return;
+		e.preventDefault();
+		e.returnValue = "";
+	});
 
+	document.addEventListener("keydown", onTableKeydown);
 	document.addEventListener("keydown", (e) => {
+		if (isConfirmOpen()) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				document.getElementById("confirm-cancel")?.click();
+			} else if (e.key === "Tab") {
+				e.preventDefault();
+				const cancel = document.getElementById("confirm-cancel");
+				const confirm = document.getElementById("confirm-ok");
+				if (e.shiftKey) {
+					(document.activeElement === cancel ? confirm : cancel)?.focus();
+				} else {
+					(document.activeElement === confirm ? cancel : confirm)?.focus();
+				}
+			}
+			return;
+		}
 		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
 			e.preventDefault();
 			openPalette();
@@ -479,6 +1118,9 @@ window.kui = (function () {
 		} else if (e.key === "Escape") {
 			if (isPaletteOpen()) closePalette();
 			else closeDetail();
+		} else if (isPaletteOpen() && e.key === "Tab") {
+			e.preventDefault();
+			document.getElementById("palette-input")?.focus();
 		} else if (isPaletteOpen() && ["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) {
 			movePaletteSelection(e.key);
 			e.preventDefault();
@@ -487,13 +1129,42 @@ window.kui = (function () {
 
 	document.body.addEventListener("toast", (e) => showToast(e.detail.toast));
 
+	document.body.addEventListener("htmx:configRequest", (e) => {
+		const token = document.querySelector('meta[name="kui-csrf-token"]')?.content;
+		if (token) e.detail.headers["X-Kui-CSRF"] = token;
+	});
+	document.body.addEventListener("htmx:beforeRequest", (e) => {
+		if (e.detail.target && e.detail.target.id === "palette-results") {
+			e.detail.target.innerHTML = '<div class="loading-state" role="status">Searching…</div>';
+		}
+	});
+
+	document.body.addEventListener("htmx:sseOpen", () => {
+		const statusbar = document.getElementById("statusbar");
+		if (statusbar) statusbar.dataset.watchState = "connected";
+	});
+	document.body.addEventListener("htmx:sseError", () => {
+		const statusbar = document.getElementById("statusbar");
+		if (statusbar) statusbar.dataset.watchState = "reconnecting";
+	});
+
 	// Intercepts every hx-confirm-bearing element globally — no per-button
 	// wiring needed for the two existing call sites (Delete/Evict) or any
 	// future one.
 	document.body.addEventListener("htmx:confirm", (e) => {
-		if (!e.detail.question) return;
+		const trigger = e.detail.elt;
+		const selector = trigger && trigger.getAttribute("hx-target");
+		const destination = e.detail.target || (selector ? document.querySelector(selector) : null);
+		const replacesDetail = destination && (destination.id === "detail-pane" || destination.id === "content");
+		let question = e.detail.question || "";
+		if (hasUnsavedYAMLChanges() && replacesDetail) {
+			question = question
+				? question + "\nThis will discard unsaved YAML changes."
+				: "Discard unsaved YAML changes?";
+		}
+		if (!question) return;
 		e.preventDefault();
-		showConfirmModal(e.detail.question, () => e.detail.issueRequest(true));
+		showConfirmModal(question, () => e.detail.issueRequest(true));
 	});
 
 	// htmx only swaps 2xx responses by default — a failed fragment request
@@ -502,10 +1173,27 @@ window.kui = (function () {
 	document.body.addEventListener("htmx:responseError", (e) => {
 		const xhr = e.detail.xhr;
 		const msg = (xhr && xhr.responseText ? xhr.responseText : "request failed").trim().slice(0, 300);
+		const target = e.detail.target;
+		const requestElement = e.detail.elt;
+		const yamlTarget = (target && target.id === "yaml-result") ||
+			(requestElement && requestElement.closest && requestElement.closest("#tab-yaml"));
+		if (yamlTarget) {
+			const result = document.getElementById("yaml-result");
+			if (result) {
+				result.textContent = msg;
+				result.classList.add("yaml-error");
+				result.setAttribute("role", "alert");
+			}
+		}
+		if (target && target.id === "palette-results") {
+			target.textContent = "Search failed: " + msg;
+			target.setAttribute("role", "alert");
+		}
 		showToast({ level: "error", message: msg });
 	});
 
 	document.body.addEventListener("htmx:beforeSwap", (e) => {
+		if (e.detail.target && e.detail.target.id === "detail-pane") disposeStreams();
 		if (e.detail.target && e.detail.target.classList && e.detail.target.classList.contains("list-pane")) {
 			e.detail.target.dataset.scrollTop = e.detail.target.scrollTop;
 		}
@@ -514,12 +1202,18 @@ window.kui = (function () {
 	document.body.addEventListener("htmx:afterSwap", (e) => {
 		const target = e.detail.target;
 		if (!target) return;
+		if (target.id === "palette-results") syncPaletteOptions();
 
 		if (target.id === "detail-pane") {
 			const hasContent = target.innerHTML.trim() !== "";
 			target.classList.toggle("open", hasContent);
 			const splitter = document.getElementById("detail-splitter");
 			if (splitter) splitter.style.display = hasContent ? "block" : "none";
+			syncYAMLDirtyState();
+		}
+
+		if (target.id === "yaml-result" && target.textContent.toLowerCase().includes("applied")) {
+			markYAMLEditorSaved();
 		}
 
 		if (target.id === "content") {
@@ -531,23 +1225,39 @@ window.kui = (function () {
 			if (target.dataset.scrollTop) target.scrollTop = parseInt(target.dataset.scrollTop, 10);
 		}
 	});
-
+	restoreClientListState();
+	restoreRowDensity();
 	return {
 		showTab,
 		startLogs,
 		startShell,
+		toggleLogs,
+		clearLogs,
+		filterLogs,
+		copyTerminalSelection,
+		clearTerminal,
 		filterRows,
 		closeDetail,
+		clearRowFilter,
 		setBreadcrumbName,
 		selectSidebarLink,
 		changeNamespace,
+		filterNamespaceOptions,
 		clearSelection,
 		bulkDelete,
 		applyMetrics,
 		applyCounts,
 		openPalette,
 		closePalette,
+		recordRecent,
 		toggleTheme,
+		applyResourceSelectors,
 		toggleSecretValue,
+		nextResourcePage,
+		previousResourcePage,
+		changeResourcePageSize,
+		setRowDensity,
+		copyText,
+		downloadYAML,
 	};
 })();

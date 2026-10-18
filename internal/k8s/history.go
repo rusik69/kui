@@ -2,11 +2,13 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 const revisionAnnotation = "deployment.kubernetes.io/revision"
@@ -33,7 +35,24 @@ func DeploymentHistory(ctx context.Context, c *Clients, namespace, deploymentNam
 	currentUID := dep.GetUID()
 
 	rsRK, _ := ByName("replicasets")
-	rsList, err := List(ctx, c, rsRK, namespace)
+	selectorMap, found, err := unstructured.NestedMap(dep.Object, "spec", "selector")
+	if err != nil {
+		return nil, fmt.Errorf("read deployment selector: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("deployment %q has no selector", deploymentName)
+	}
+	var deploymentSelector metav1.LabelSelector
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &deploymentSelector); err != nil {
+		return nil, fmt.Errorf("decode deployment selector: %w", err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(&deploymentSelector)
+	if err != nil {
+		return nil, fmt.Errorf("build ReplicaSet selector: %w", err)
+	}
+	rsList, err := c.Dynamic.Resource(rsRK.GVR).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
 	if err != nil {
 		return nil, err
 	}

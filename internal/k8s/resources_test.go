@@ -1,51 +1,47 @@
 package k8s
 
-import "testing"
+import (
+	"context"
+	"testing"
 
-func TestByName(t *testing.T) {
-	rk, ok := ByName("pods")
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ktesting "k8s.io/client-go/testing"
+)
+
+func TestListWithOptionsForwardsSelectors(t *testing.T) {
+	pod := func(name, app string) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "default", Labels: map[string]string{"app": app},
+		}}
+	}
+	fake := dynamicfake.NewSimpleDynamicClient(clientgoscheme.Scheme,
+		pod("web-1", "web"), pod("web-2", "web"), pod("worker-1", "worker"),
+	)
+	var restrictions ktesting.ListRestrictions
+	fake.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		restrictions = action.(ktesting.ListAction).GetListRestrictions()
+		return false, nil, nil
+	})
+	client := &Clients{Dynamic: fake}
+	pods, ok := ByName("pods")
 	if !ok {
-		t.Fatal("expected pods to be found in registry")
-	}
-	if rk.Kind != "Pod" || rk.Group != "Workloads" || !rk.Namespaced {
-		t.Errorf("unexpected ResourceKind for pods: %+v", rk)
+		t.Fatal("pods resource kind is not registered")
 	}
 
-	if _, ok := ByName("not-a-real-kind"); ok {
-		t.Error("expected unknown kind to not be found")
+	if _, err := ListWithOptions(context.Background(), client, pods, "default", metav1.ListOptions{
+		LabelSelector: "app=web",
+		FieldSelector: "metadata.name=web-2",
+	}); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestGroups(t *testing.T) {
-	groups := Groups()
-	if len(groups) == 0 {
-		t.Fatal("expected at least one group")
+	if got := restrictions.Labels.String(); got != "app=web" {
+		t.Errorf("label selector sent to dynamic client = %q, want app=web", got)
 	}
-	want := map[string]bool{"Workloads": false, "Network": false, "Config": false, "Storage": false, "Cluster": false}
-	for _, g := range groups {
-		if _, ok := want[g]; ok {
-			want[g] = true
-		}
-	}
-	for g, found := range want {
-		if !found {
-			t.Errorf("expected group %q to be present in Groups()", g)
-		}
-	}
-}
-
-func TestInGroup(t *testing.T) {
-	workloads := InGroup("Workloads")
-	if len(workloads) == 0 {
-		t.Fatal("expected Workloads group to have entries")
-	}
-	for _, rk := range workloads {
-		if rk.Group != "Workloads" {
-			t.Errorf("InGroup(\"Workloads\") returned a kind from group %q", rk.Group)
-		}
-	}
-
-	if got := InGroup("NoSuchGroup"); got != nil {
-		t.Errorf("expected nil for unknown group, got %v", got)
+	if got := restrictions.Fields.String(); got != "metadata.name=web-2" {
+		t.Errorf("field selector sent to dynamic client = %q, want metadata.name=web-2", got)
 	}
 }

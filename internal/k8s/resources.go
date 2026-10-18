@@ -121,11 +121,32 @@ func canListAndWatch(verbs metav1.Verbs) bool {
 // List returns every object of the given kind, scoped to namespace unless
 // the kind is cluster-scoped or namespace is empty ("" / "_all").
 func List(ctx context.Context, c *Clients, rk ResourceKind, namespace string) (*unstructured.UnstructuredList, error) {
+	return ListWithOptions(ctx, c, rk, namespace, metav1.ListOptions{})
+}
+
+// ListWithOptions lists objects with API-server selectors and pagination options.
+func ListWithOptions(ctx context.Context, c *Clients, rk ResourceKind, namespace string, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {
+	return listWith(ctx, c, rk, namespace, opts)
+}
+
+// ListFromCache is List served from the API server's watch cache: it passes
+// ResourceVersion "0", which declares the client accepts a possibly-stale
+// snapshot. A list without a ResourceVersion must be read from etcd for
+// consistency, so on a large cluster the cached variant is dramatically
+// cheaper. This is right for pollers and keystroke-driven searches (the
+// sidebar badges, the 3s status bar, the command palette); the main table
+// view deliberately uses List, where freshness is what the user is looking
+// at.
+func ListFromCache(ctx context.Context, c *Clients, rk ResourceKind, namespace string) (*unstructured.UnstructuredList, error) {
+	return listWith(ctx, c, rk, namespace, metav1.ListOptions{ResourceVersion: "0"})
+}
+
+func listWith(ctx context.Context, c *Clients, rk ResourceKind, namespace string, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {
 	ri := c.Dynamic.Resource(rk.GVR)
 	if rk.Namespaced && namespace != "" && namespace != "_all" {
-		return ri.Namespace(namespace).List(ctx, metav1.ListOptions{})
+		return ri.Namespace(namespace).List(ctx, opts)
 	}
-	return ri.List(ctx, metav1.ListOptions{})
+	return ri.List(ctx, opts)
 }
 
 // Get fetches one object by name.

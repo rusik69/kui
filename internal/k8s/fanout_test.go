@@ -2,12 +2,18 @@ package k8s
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func TestFanOutList(t *testing.T) {
@@ -60,5 +66,45 @@ func TestFanOutList(t *testing.T) {
 	}
 	if deployResult.List != nil && len(deployResult.List.Items) != 0 {
 		t.Errorf("expected 0 deployments, got %d", len(deployResult.List.Items))
+	}
+}
+
+func TestFanOutListBoundsConcurrentRequests(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClient(clientgoscheme.Scheme)
+	var active, maxActive atomic.Int32
+	dyn.PrependReactor("list", "*", func(clienttesting.Action) (bool, runtime.Object, error) {
+		current := active.Add(1)
+		for previous := maxActive.Load(); current > previous; previous = maxActive.Load() {
+			if maxActive.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		active.Add(-1)
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+
+	var wg sync.WaitGroup
+	results := make([][]KindResult, 2)
+	for caller := range results {
+		wg.Add(1)
+		go func(caller int) {
+			defer wg.Done()
+			results[caller] = FanOutList(context.Background(), &Clients{Dynamic: dyn}, "default")
+		}(caller)
+	}
+	wg.Wait()
+	for caller, kinds := range results {
+		if len(kinds) != len(Registry) {
+			t.Fatalf("caller %d: expected %d kind results, got %d", caller, len(Registry), len(kinds))
+		}
+		for _, result := range kinds {
+			if result.Err != nil {
+				t.Errorf("caller %d list %s: %v", caller, result.Kind.Name, result.Err)
+			}
+		}
+	}
+	if got := maxActive.Load(); got > maxFanOutWorkers {
+		t.Errorf("maximum concurrent requests = %d, want at most %d", got, maxFanOutWorkers)
 	}
 }

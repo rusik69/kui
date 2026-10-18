@@ -1,25 +1,36 @@
 {{define "searchresults"}}
+{{if .Error}}<div class="error-state" role="alert">{{.Error}}</div>{{end}}
 {{if .Commands}}
-<div class="section-title">Commands</div>
-{{range $i, $cmd := .Commands}}
-{{if $cmd.FullNav}}
-<div class="palette-result {{if eq $i 0}}active{{end}}" onclick="location.href='{{$cmd.URL}}'">{{$cmd.Label}}</div>
-{{else}}
-<div class="palette-result {{if eq $i 0}}active{{end}}" hx-get="{{$cmd.URL}}" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="{{$cmd.URL}}" onclick="kui.closePalette()">{{$cmd.Label}}</div>
-{{end}}
-{{end}}
+<div class="palette-group" role="group" aria-label="Commands">
+  <div class="section-title">Commands</div>
+  {{range $i, $cmd := .Commands}}
+  {{if $cmd.FullNav}}
+  <div class="palette-result {{if eq $i 0}}active{{end}}" role="option" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}"
+       data-recent-url="{{$cmd.URL}}" data-recent-label="{{$cmd.Label}}" data-recent-full-nav="true"
+       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,true);location.href=this.dataset.recentUrl">{{$cmd.Label}}</div>
+  {{else}}
+  <div class="palette-result {{if eq $i 0}}active{{end}}" role="option" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}"
+       data-recent-url="{{$cmd.URL}}" data-recent-label="{{$cmd.Label}}" data-recent-full-nav="false"
+       hx-get="{{$cmd.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$cmd.URL}}"
+       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,false);kui.closePalette()">{{$cmd.Label}}</div>
+  {{end}}
+  {{end}}
+</div>
 {{end}}
 
 {{if .Objects}}
-<div class="section-title">Objects</div>
-{{range .Objects}}
-<div class="palette-result" hx-get="{{.ListURL}}" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="{{.ListURL}}" onclick="kui.closePalette()">
-  {{.Kind}}/{{.Name}}{{if .Namespace}} <span class="text-dim">{{.Namespace}}</span>{{end}}
+<div class="palette-group" role="group" aria-label="Objects">
+  <div class="section-title">Objects</div>
+  {{range .Objects}}
+  <div class="palette-result" role="option" aria-selected="false"
+       data-recent-url="{{.ListURL}}" data-recent-label="{{.Kind}}/{{.Name}}{{if .Namespace}} ({{.Namespace}}){{end}}" data-recent-full-nav="false"
+       hx-get="{{.ListURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{.ListURL}}"
+       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,false);kui.closePalette()">
+    {{.Kind}}/{{.Name}}{{if .Namespace}} <span class="text-dim">{{.Namespace}}</span>{{end}}
+  </div>
+  {{end}}
 </div>
 {{end}}
-{{end}}
 
-{{if and (not .Commands) (not .Objects)}}<div class="empty-state">No results</div>{{end}}
+{{if and (not .Error) (not .Commands) (not .Objects)}}<div class="empty-state" role="status">No results</div>{{end}}
 {{end}}

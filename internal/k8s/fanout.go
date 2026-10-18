@@ -14,20 +14,41 @@ type KindResult struct {
 	Err  error
 }
 
-// FanOutList lists every kind in Registry concurrently. Callers should wrap
-// ctx with a deadline (e.g. context.WithTimeout) so one slow or unreachable
-// API group can't stall the whole call — FanOutList itself has no timeout
-// opinion, that policy belongs at the call site.
+// FanOutList lists every kind in Registry concurrently, via the
+// watch-cache-serving ListFromCache. A fixed worker pool and shared semaphore
+// bound API requests across concurrent callers. Callers should wrap ctx with
+// a deadline; FanOutList itself has no timeout policy.
+const maxFanOutWorkers = 6
+
+var fanOutSlots = make(chan struct{}, maxFanOutWorkers)
+
 func FanOutList(ctx context.Context, c *Clients, ns string) []KindResult {
 	results := make([]KindResult, len(Registry))
+	jobs := make(chan int, len(Registry))
+	for i := range Registry {
+		jobs <- i
+	}
+	close(jobs)
+
+	workers := min(len(Registry), maxFanOutWorkers)
 	var wg sync.WaitGroup
-	for i, rk := range Registry {
-		wg.Add(1)
-		go func(i int, rk ResourceKind) {
+	wg.Add(workers)
+	for range workers {
+		go func() {
 			defer wg.Done()
-			list, err := List(ctx, c, rk, ns)
-			results[i] = KindResult{Kind: rk, List: list, Err: err}
-		}(i, rk)
+			for i := range jobs {
+				rk := Registry[i]
+				select {
+				case fanOutSlots <- struct{}{}:
+				case <-ctx.Done():
+					results[i] = KindResult{Kind: rk, Err: ctx.Err()}
+					continue
+				}
+				list, err := ListFromCache(ctx, c, rk, ns)
+				<-fanOutSlots
+				results[i] = KindResult{Kind: rk, List: list, Err: err}
+			}
+		}()
 	}
 	wg.Wait()
 	return results

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -10,22 +11,73 @@ import (
 )
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	ctxName, err := s.mgr.DefaultContext()
-	if err != nil || ctxName == "" {
-		http.Error(w, "no current-context set in kubeconfig", http.StatusInternalServerError)
-		return
+	ctxName := s.defaultContext
+	if ctxName == "" {
+		var err error
+		ctxName, err = s.mgr.DefaultContext()
+		if err != nil {
+			http.Error(w, "unable to load kubeconfig context", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if ctxName == "" {
+		var err error
+		ctxName, err = s.fallbackContext()
+		if err != nil {
+			http.Error(w, "no usable kubeconfig context is configured", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	http.Redirect(w, r, "/c/"+encodeCtx(ctxName), http.StatusFound)
 }
 
 func (s *Server) handleContextPage(w http.ResponseWriter, r *http.Request) {
-	ctxName := r.PathValue("ctx")
-	data, err := s.buildPageData(r.Context(), ctxName, "_all", "overview")
+	ctxID := r.PathValue("ctx")
+	data, err := s.buildPageData(r.Context(), ctxID, "", "overview")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		fallback, fallbackErr := s.fallbackContext()
+		if fallbackErr == nil && fallback != "" && encodeCtx(fallback) != ctxID {
+			http.Redirect(w, r, "/c/"+encodeCtx(fallback), http.StatusFound)
+			return
+		}
+		http.Error(w, "unable to load kubeconfig context: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.render(w, "page", data)
+}
+
+func (s *Server) fallbackContext() (string, error) {
+	contexts, err := s.mgr.ListContexts()
+	if err != nil {
+		return "", err
+	}
+	contains := func(name string) bool {
+		for _, context := range contexts {
+			if context.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(s.defaultContext) {
+		return s.defaultContext, nil
+	}
+	if name, err := s.mgr.DefaultContext(); err == nil && contains(name) {
+		return name, nil
+	}
+	if len(contexts) > 0 {
+		return contexts[0].Name, nil
+	}
+	return "", fmt.Errorf("kubeconfig has no contexts")
+}
+
+func defaultNamespace(contexts []k8s.ContextInfo, ctxName string) string {
+	for _, ctx := range contexts {
+		if ctx.Name == ctxName && ctx.Namespace != "" {
+			return ctx.Namespace
+		}
+	}
+	return "_all"
 }
 
 // buildPageData takes ctxID as it appears in the URL (base64url-encoded,
@@ -47,6 +99,24 @@ func (s *Server) buildPageData(ctx context.Context, ctxID, ns, resource string) 
 	rawContexts, err := s.mgr.ListContexts()
 	if err != nil {
 		return PageData{}, err
+	}
+
+	contextFound := false
+	for _, item := range rawContexts {
+		if item.Name == ctxName {
+			contextFound = true
+			break
+		}
+	}
+	if !contextFound {
+		return PageData{}, fmt.Errorf("context %q is not present in kubeconfig", ctxName)
+	}
+	if ns == "" {
+		if ctxName == s.defaultContext && s.defaultNamespace != "" {
+			ns = s.defaultNamespace
+		} else {
+			ns = defaultNamespace(rawContexts, ctxName)
+		}
 	}
 	contexts := make([]ContextOption, 0, len(rawContexts))
 	for _, rc := range rawContexts {
@@ -79,6 +149,7 @@ func (s *Server) buildPageData(ctx context.Context, ctxID, ns, resource string) 
 		ListURL:       "/c/" + ctxID + "/" + ns + "/" + resource + "?frame=table",
 		WatchURL:      "/c/" + ctxID + "/" + ns + "/" + resource + "/watch",
 		BulkDeleteURL: "/c/" + ctxID + "/bulk-delete",
+		CSRFToken:     s.csrfToken,
 		ConnError:     connErr,
 	}, nil
 }

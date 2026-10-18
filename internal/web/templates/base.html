@@ -4,6 +4,7 @@
 <head>
 <script>document.documentElement.setAttribute('data-theme', localStorage.getItem('kui.theme') || 'dark')</script>
 <meta charset="utf-8">
+<meta name="kui-csrf-token" content="{{.CSRFToken}}">
 <title>kui &middot; {{.ContextName}}</title>
 <link rel="stylesheet" href="/static/vendor/xterm.css">
 <link rel="stylesheet" href="/static/app.css">
@@ -23,17 +24,22 @@
       <select onchange="location.href='/c/'+this.value">
         {{range .Contexts}}<option value="{{.ID}}" {{if .Current}}selected{{end}}>{{.Name}}</option>{{end}}
       </select>
-      <select onchange="kui.changeNamespace(this.value)">
+      <input id="namespace-filter" type="search" placeholder="Filter namespaces…" aria-label="Filter namespaces"
+             oninput="kui.filterNamespaceOptions(this.value)">
+      <select id="namespace-select" name="namespace" aria-label="Namespace" onchange="kui.changeNamespace(this.value)">
         <option value="_all" {{if eq .Namespace "_all"}}selected{{end}}>All namespaces</option>
+        {{if and (ne .Namespace "_all") (not (hasString .Namespaces .Namespace))}}<option value="{{.Namespace}}" selected>{{.Namespace}}</option>{{end}}
         {{range .Namespaces}}<option value="{{.}}" {{if eq . $.Namespace}}selected{{end}}>{{.}}</option>{{end}}
       </select>
-      <div class="search-trigger" onclick="kui.openPalette()">
+      <div class="search-trigger" role="button" tabindex="0" aria-label="Open search"
+           onclick="kui.openPalette()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();kui.openPalette()}">
         <svg class="icon"><use href="#icon-search"/></svg>
         <span>Search objects, commands and hosts</span>
         <span class="kbd-hint">&#8984;K</span>
       </div>
-      <input type="text" placeholder="Filter&hellip;" id="row-filter" onkeyup="kui.filterRows(this.value)">
-      <button type="button" class="icon-btn" title="Toggle theme" onclick="kui.toggleTheme()">
+      <input type="text" placeholder="Filter…" id="row-filter" onkeyup="kui.filterRows(this.value)">
+      <button type="button" class="btn" onclick="kui.clearRowFilter()" aria-label="Clear row filter">Clear filter</button>
+      <button type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" onclick="kui.toggleTheme()">
         <svg class="icon" id="theme-icon"><use href="#icon-moon"/></svg>
       </button>
     </div>
@@ -49,17 +55,20 @@
     </div>
   </div>
 </div>
-<div class="palette-overlay" id="palette-overlay" style="display:none" onclick="if(event.target===this) kui.closePalette()">
-  <div class="palette">
+<div class="palette-overlay" id="palette-overlay" style="display:none" aria-hidden="true" onclick="if(event.target===this) kui.closePalette()">
+  <section class="palette" role="dialog" aria-modal="true" aria-labelledby="palette-title">
+    <h2 id="palette-title" class="sr-only">Search and navigation</h2>
     <input type="hidden" name="ns" value="{{.Namespace}}">
     <input type="text" id="palette-input" name="q" placeholder="Search objects, commands and hosts" autocomplete="off"
+           aria-label="Search objects, commands and hosts" role="combobox" aria-autocomplete="list"
+           aria-controls="palette-results" aria-expanded="false"
            hx-get="/c/{{.Context}}/search" hx-trigger="input changed delay:300ms, keyup[key=='Enter']"
-           hx-include="[name='ns']" hx-target="#palette-results" hx-swap="innerHTML">
-    <div id="palette-results"></div>
-  </div>
+           hx-sync="this:replace" hx-include="[name='ns']" hx-target="#palette-results" hx-swap="innerHTML">
+    <div id="palette-results" role="listbox" aria-label="Search results" aria-live="polite"></div>
+  </section>
 </div>
-<div class="confirm-overlay" id="confirm-overlay" style="display:none">
-  <div class="confirm-modal">
+<div class="confirm-overlay" id="confirm-overlay" style="display:none" aria-hidden="true">
+  <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-message" tabindex="-1">
     <p id="confirm-message"></p>
     <div class="toolbar">
       <button type="button" class="btn" id="confirm-cancel">Cancel</button>
@@ -67,7 +76,8 @@
     </div>
   </div>
 </div>
-<div class="statusbar" id="statusbar"
+<div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+<div class="statusbar" id="statusbar" data-watch-state="connecting"
      hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML">
   Live
 </div>
@@ -93,9 +103,9 @@
   <div class="list-pane" id="list-pane"
        hx-ext="sse" sse-connect="{{.WatchURL}}"
        hx-get="{{.ListURL}}" hx-trigger="load, sse:message" hx-swap="innerHTML"
-       data-bulk-delete-url="{{.BulkDeleteURL}}">
+       data-list-url="{{.ListURL}}" data-bulk-delete-url="{{.BulkDeleteURL}}">
   </div>
-  <div class="detail-splitter" id="detail-splitter" style="display:none"></div>
+  <div class="detail-splitter" id="detail-splitter" style="display:none" role="separator" aria-label="Resize detail pane" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900" aria-valuenow="420" tabindex="0"></div>
   <div class="detail-pane" id="detail-pane"></div>
 </div>
 {{end}}

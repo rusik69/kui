@@ -3,12 +3,12 @@
   <div class="detail-header-row">
     <div>{{if .DotClass}}<span class="dot {{.DotClass}}"></span>{{end}}<strong>{{.Name}}</strong></div>
     <div class="icon-actions">
-      <button type="button" class="icon-btn" title="Delete"
+      <button type="button" class="icon-btn" title="Delete" aria-label="Delete {{.Kind}} {{.Name}}"
               hx-delete="{{.DeleteURL}}" hx-confirm="Delete {{.Kind}} {{.Name}}?"
               hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-trash"/></svg></button>
-      {{if .IsPod}}<button type="button" class="icon-btn" title="Evict" hx-delete="{{.EvictURL}}" hx-confirm="Evict pod {{.Name}}?"
+      {{if .IsPod}}<button type="button" class="icon-btn" title="Evict" aria-label="Evict Pod {{.Name}}" hx-delete="{{.EvictURL}}" hx-confirm="Evict pod {{.Name}}?"
               hx-target="#detail-pane" hx-swap="innerHTML"><svg class="icon"><use href="#icon-eject"/></svg></button>{{end}}
-      <button type="button" class="icon-btn" title="Close" onclick="kui.closeDetail()"><svg class="icon"><use href="#icon-close"/></svg></button>
+      <button type="button" class="icon-btn" title="Close" aria-label="Close details" onclick="kui.closeDetail()"><svg class="icon"><use href="#icon-close"/></svg></button>
     </div>
   </div>
   <div class="text-dim">{{.Kind}} &middot; {{.Namespace}} &middot; {{.Age}}</div>
@@ -102,10 +102,13 @@
   <div id="tab-yaml" class="detail-tab-panel" style="display:none">
     <form hx-put="{{.YAMLDiffURL}}" hx-target="#yaml-diff-pane" hx-swap="innerHTML">
       <input type="hidden" name="original" value="{{.YAML}}">
-      <textarea class="yaml-editor" name="yaml" spellcheck="false">{{.YAML}}</textarea>
+      <textarea id="yaml-editor" class="yaml-editor" name="yaml" spellcheck="false">{{.YAML}}</textarea>
       <div class="toolbar" style="border:none;padding:8px 0">
-        <button class="btn btn-primary" type="submit"><svg class="icon"><use href="#icon-pencil"/></svg>Review changes</button>
-        <span id="yaml-result"></span>
+        <button class="btn btn-primary" type="submit" disabled><svg class="icon"><use href="#icon-pencil"/></svg>Review changes</button>
+        <button class="btn" type="button" onclick="kui.copyText(document.getElementById('yaml-editor').value)">Copy YAML</button>
+        <button class="btn" type="button" data-filename="{{.Name}}.yaml" onclick="kui.downloadYAML(this.dataset.filename)">Download YAML</button>
+        <span id="yaml-dirty-status" class="text-dim" aria-live="polite">Saved</span>
+        <span id="yaml-result" aria-live="polite"></span>
       </div>
     </form>
     <div id="yaml-diff-pane"></div>
@@ -123,14 +126,26 @@
 
   {{if .IsPod}}
   <div id="tab-logs" class="detail-tab-panel" style="display:none">
-    <select id="log-container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select>
-    <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Tail</button>
-    <div id="logs-pane" class="log-pane"></div>
+    <div class="stream-controls">
+      <label>Container <select id="log-container" aria-label="Log container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+      <label>Initial lines <input id="log-tail-lines" type="number" min="1" max="5000" value="500" aria-label="Initial log lines"></label>
+      <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Tail</button>
+      <button id="log-pause" class="btn" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
+      <button class="btn" onclick="kui.clearLogs()">Clear</button>
+      <span id="log-status" role="status" aria-live="polite">Disconnected</span>
+    </div>
+    <label class="log-filter">Filter logs <input id="log-filter" type="search" oninput="kui.filterLogs()"></label>
+    <div id="logs-pane" class="log-pane" role="log" aria-live="off"></div>
   </div>
 
   <div id="tab-shell" class="detail-tab-panel" style="display:none">
-    <select id="shell-container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select>
-    <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
+    <div class="stream-controls">
+      <label>Container <select id="shell-container" aria-label="Shell container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
+      <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
+      <button class="btn" onclick="kui.copyTerminalSelection()">Copy selection</button>
+      <button class="btn" onclick="kui.clearTerminal()">Clear terminal</button>
+      <span id="shell-status" role="status" aria-live="polite">Disconnected</span>
+    </div>
     <div id="term-pane" class="term-pane"></div>
   </div>
 

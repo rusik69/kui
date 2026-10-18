@@ -25,6 +25,7 @@ type Clients struct {
 
 // Clients returns the cached client bundle for ctxName, building it on first use.
 func (m *Manager) Clients(ctxName string) (*Clients, error) {
+	m.refreshIfKubeconfigChanged()
 	m.mu.RLock()
 	c, ok := m.clients[ctxName]
 	m.mu.RUnlock()

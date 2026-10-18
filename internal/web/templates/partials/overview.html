@@ -54,7 +54,7 @@
   {{range .ObjectCounts}}
   <div class="object-row">
     <span class="object-kind">{{.Kind}}</span>
-    <span class="bar-track"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:100%"></span></span>
+    <span class="bar-track"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
     <span class="object-count">{{.Count}}</span>
   </div>
   {{end}}

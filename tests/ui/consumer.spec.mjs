@@ -133,6 +133,17 @@ test("resource table filtering, sorting, and selection update visible results", 
   await expect(page.locator("#list-pane #kui-table tbody tr[data-name='alpha'] .row-select")).toBeChecked();
 });
 
+test("Enter on an all-resources kind navigates to that resource table", async ({ page }) => {
+  await openResource(page, "all");
+  const row = page.locator('#list-pane #kui-table tbody tr[data-name="Pod"]');
+  await expect(row).toBeVisible();
+  const resourcePath = await row.getAttribute("data-id");
+  await row.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`${resourcePath}$`));
+  await expect(page.locator("#list-pane #kui-table tbody tr[data-name='alpha']")).toBeVisible();
+});
+
 test("keyboard activation of an in-row copy button does not open its row detail", async ({ page }) => {
   await openResource(page, "pods");
   const row = page.locator('#list-pane #kui-table tbody tr[data-name="alpha"]');

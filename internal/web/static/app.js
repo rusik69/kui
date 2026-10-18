@@ -1201,7 +1201,7 @@ window.kui = (function () {
 					swap: row.getAttribute("hx-swap") || "innerHTML",
 				};
 				const pushURL = row.getAttribute("hx-push-url");
-				if (pushURL) request.pushURL = pushURL;
+				if (pushURL) request.push = pushURL;
 				window.htmx.ajax("GET", row.getAttribute("hx-get"), request);
 				return;
 			}

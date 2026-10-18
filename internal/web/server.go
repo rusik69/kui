@@ -291,6 +291,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/debug-shell", s.protectMutation(s.handleDebugShell))
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/debug-shell/{pod}/kill", s.protectMutation(s.handleDebugShellKill))
+	s.mux.HandleFunc("POST /c/{ctx}/{ns}/nodes/{node}/debug-shell", s.protectMutation(s.handleNodeDebugShell))
 
 	s.mux.HandleFunc("GET /c/{ctx}/metrics/pods", s.handleMetricsPods)
 	s.mux.HandleFunc("GET /c/{ctx}/metrics/nodes", s.handleMetricsNodes)

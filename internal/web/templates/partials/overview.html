@@ -3,30 +3,42 @@
   <h1 class="toolbar-title">Cluster Overview</h1>
 </div>
 <div class="tile-grid">
-  <div class="stat-tile">
-    <div class="value">{{.NodeReadyCount}}/{{.NodeCount}}</div>
-    <div class="label">Nodes ready</div>
-  </div>
-  <div class="stat-tile">
-    <div class="value">{{.PodRunning}}</div>
-    <div class="label">Pods running</div>
-  </div>
-  <div class="stat-tile {{if gt .PodPending 0}}warn{{end}}">
-    <div class="value">{{.PodPending}}</div>
-    <div class="label">Pods pending</div>
-  </div>
-  <div class="stat-tile {{if gt .PodFailed 0}}danger{{end}}">
-    <div class="value">{{.PodFailed}}</div>
-    <div class="label">Pods failed</div>
-  </div>
-  <div class="stat-tile">
-    <div class="value">{{.NamespaceCount}}</div>
-    <div class="label">Namespaces</div>
-  </div>
-  <div class="stat-tile {{if gt .WarningCount 0}}warn{{end}}">
-    <div class="value">{{.WarningCount}}</div>
-    <div class="label">Warning events</div>
-  </div>
+  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/nodes"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/nodes" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/nodes" aria-label="Open nodes">
+    <span class="value">{{.NodeReadyCount}}/{{.NodeCount}}</span>
+    <span class="label">Nodes ready</span>
+  </a>
+  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" aria-label="Open running pods">
+    <span class="value">{{.PodRunning}}</span>
+    <span class="label">Pods running</span>
+  </a>
+  <a class="stat-tile stat-tile-link {{if gt .PodPending 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" aria-label="Open pending pods">
+    <span class="value">{{.PodPending}}</span>
+    <span class="label">Pods pending</span>
+  </a>
+  <a class="stat-tile stat-tile-link {{if gt .PodFailed 0}}danger{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" aria-label="Open failed pods">
+    <span class="value">{{.PodFailed}}</span>
+    <span class="label">Pods failed</span>
+  </a>
+  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/namespaces"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/namespaces" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/namespaces" aria-label="Open namespaces">
+    <span class="value">{{.NamespaceCount}}</span>
+    <span class="label">Namespaces</span>
+  </a>
+  <a class="stat-tile stat-tile-link {{if gt .WarningCount 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning"
+     hx-get="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" aria-label="Open warning events">
+    <span class="value">{{.WarningCount}}</span>
+    <span class="label">Warning events</span>
+  </a>
 </div>
 
 <div class="section-title">Capacity</div>
@@ -58,11 +70,13 @@
 <div class="section-title">Objects</div>
 <div class="objects-panel">
   {{range .ObjectCounts}}
-  <div class="object-row">
+  <a class="object-row object-row-link" href="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}"
+     hx-get="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" hx-target="#content" hx-swap="innerHTML"
+     hx-push-url="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" aria-label="Open {{.Kind}}">
     <span class="object-kind">{{.Kind}}</span>
     <span class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.BarPercent}}" aria-label="{{.Kind}} count share"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
     <span class="object-count">{{.Count}}</span>
-  </div>
+  </a>
   {{end}}
 </div>
 {{end}}
@@ -72,7 +86,9 @@
 <table class="resource-table">
   <thead><tr><th>Name</th><th>Reason</th><th>Ready</th></tr></thead>
   <tbody>
-    {{range .NeedsAttention}}<tr><td>{{.Name}}</td><td>{{.Reason}}</td><td>{{.Detail}}</td></tr>{{end}}
+    {{range .NeedsAttention}}<tr><td><a class="attention-link" href="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}"
+      hx-get="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}" hx-target="#detail-pane" hx-swap="innerHTML"
+      aria-label="Open pod {{.Name}} in namespace {{.Namespace}}">{{.Name}}</a></td><td>{{.Reason}}</td><td>{{.Detail}}</td></tr>{{end}}
   </tbody>
 </table>
 {{end}}

@@ -31,6 +31,14 @@ window.kui = (function () {
 	let watchFailed = false;
 	let secretTimers = new WeakMap();
 	let selectedNames = new Map();
+	let activeSplitter = null;
+	let activeDetailPane = null;
+	let splitterListenersInstalled = false;
+	let splitterWidthLoaded = false;
+	let splitterDragType = null;
+	let splitterPointerId = null;
+	let splitterStartX = 0;
+	let splitterStartWidth = 0;
 	const maxLogLines = 5000;
 	const maxLogBytes = 2 * 1024 * 1024;
 
@@ -363,6 +371,37 @@ window.kui = (function () {
 		const context = document.body.dataset.ctx;
 		const path = "/c/" + encodeURIComponent(context) + "/" + encodeURIComponent(namespace.value) + "/debug-shell";
 		window.htmx.ajax("POST", path, { target: "#detail-pane", swap: "innerHTML" });
+	}
+	function openNodeShell(nodeName) {
+		const namespace = document.getElementById("namespace-select");
+		if (!namespace || !namespace.value || namespace.value === "_all") {
+			showToast({ level: "error", message: "Choose a namespace before starting a node shell." });
+			if (namespace) namespace.focus();
+			return;
+		}
+		const pane = document.getElementById("detail-pane");
+		if (!pane || !window.htmx) {
+			showToast({ level: "error", message: "The node shell interface is unavailable." });
+			return;
+		}
+		const context = document.body.dataset.ctx;
+		const path = "/c/" + encodeURIComponent(context) + "/" + encodeURIComponent(namespace.value) +
+			"/nodes/" + encodeURIComponent(nodeName) + "/debug-shell";
+		showConfirmModal(
+			"Open a shell on node " + nodeName + " in namespace " + namespace.value +
+				"? It joins host network/PID/IPC namespaces and mounts the host root read-only at /host.",
+			() => {
+				pane.classList.add("open");
+				const splitter = document.getElementById("detail-splitter");
+				if (splitter) splitter.style.display = "block";
+				const loading = document.createElement("div");
+				loading.className = "loading-state";
+				loading.setAttribute("role", "status");
+				loading.textContent = "Starting node shell…";
+				pane.replaceChildren(loading);
+				window.htmx.ajax("POST", path, { target: "#detail-pane", swap: "innerHTML" });
+			},
+		);
 	}
 
 	function copyTerminalSelection() {
@@ -1359,25 +1398,34 @@ window.kui = (function () {
 	function initSplitter() {
 		const splitter = document.getElementById("detail-splitter");
 		const pane = document.getElementById("detail-pane");
-		if (!splitter || !pane) return;
+		if (!splitter || !pane) {
+			activeSplitter = null;
+			activeDetailPane = null;
+			return;
+		}
+		if (activeSplitter === splitter && activeDetailPane === pane) return;
+		activeSplitter = splitter;
+		activeDetailPane = pane;
+
 		const minWidth = 280;
-		const preferredMaxWidth = 900;
 		const defaultWidth = 420;
 		const currentWidth = () =>
 			parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || defaultWidth;
 		const maxWidth = () => {
-			if (innerWidth <= 720) return Math.max(minWidth, Math.min(preferredMaxWidth, innerWidth * 0.9));
+			if (innerWidth <= 720) return Math.max(minWidth, Math.min(900, innerWidth * 0.9));
 			const sidebar = document.querySelector(".sidebar");
 			const sidebarWidth = sidebar ? sidebar.getBoundingClientRect().width : 0;
-			return Math.max(minWidth, Math.min(preferredMaxWidth, innerWidth - sidebarWidth - minWidth - (splitter.offsetWidth || 12)));
+			return Math.max(minWidth, Math.min(900, innerWidth - sidebarWidth - minWidth - (activeSplitter?.offsetWidth || 12)));
 		};
 		const applyWidth = (width, save) => {
 			const maximum = maxWidth();
 			const next = Math.max(minWidth, Math.min(maximum, width));
 			document.documentElement.style.setProperty("--detail-pane-w", next + "px");
-			splitter.setAttribute("aria-valuemin", String(minWidth));
-			splitter.setAttribute("aria-valuemax", String(maximum));
-			splitter.setAttribute("aria-valuenow", String(next));
+			if (activeSplitter) {
+				activeSplitter.setAttribute("aria-valuemin", String(minWidth));
+				activeSplitter.setAttribute("aria-valuemax", String(maximum));
+				activeSplitter.setAttribute("aria-valuenow", String(next));
+			}
 			if (save) {
 				try {
 					localStorage.setItem("kui.detailPaneWidth", String(next));
@@ -1387,38 +1435,25 @@ window.kui = (function () {
 			}
 			return next;
 		};
-
-		let savedWidth = defaultWidth;
-		try {
-			const stored = Number.parseInt(localStorage.getItem("kui.detailPaneWidth"), 10);
-			if (Number.isFinite(stored)) savedWidth = stored;
-		} catch {
-			// The default width remains usable when persistent storage is unavailable.
-		}
-		applyWidth(savedWidth, false);
-
-		let dragType = null;
-		let pointerId = null;
-		let startX = 0;
-		let startWidth = 0;
 		const isDividerTarget = (event) => {
-			if (splitter.contains(event.target)) return true;
-			if (!pane.classList.contains("open")) return false;
-			const rect = pane.getBoundingClientRect();
-			const hitWidth = Math.max(18, splitter.getBoundingClientRect().width);
+			if (!activeSplitter || !activeDetailPane) return false;
+			if (activeSplitter.contains(event.target)) return true;
+			if (!activeDetailPane.classList.contains("open")) return false;
+			const rect = activeDetailPane.getBoundingClientRect();
+			const hitWidth = Math.max(18, activeSplitter.getBoundingClientRect().width);
 			return event.clientX >= rect.left - hitWidth && event.clientX <= rect.left + hitWidth &&
 				event.clientY >= rect.top && event.clientY <= rect.bottom;
 		};
 		const beginDrag = (event, type) => {
-			if (event.button !== 0 || !isDividerTarget(event) || dragType) return;
-			dragType = type;
-			pointerId = type === "pointer" ? event.pointerId : null;
-			startX = event.clientX;
-			startWidth = currentWidth();
+			if (event.button !== 0 || !isDividerTarget(event) || splitterDragType) return;
+			splitterDragType = type;
+			splitterPointerId = type === "pointer" ? event.pointerId : null;
+			splitterStartX = event.clientX;
+			splitterStartWidth = currentWidth();
 			document.documentElement.classList.add("kui-resizing");
 			if (type === "pointer") {
 				try {
-					splitter.setPointerCapture(event.pointerId);
+					activeSplitter.setPointerCapture(event.pointerId);
 				} catch {
 					// Document listeners keep the drag active if capture is unavailable.
 				}
@@ -1426,26 +1461,47 @@ window.kui = (function () {
 			event.preventDefault();
 			event.stopPropagation();
 		};
-		const moveDrag = (clientX) => applyWidth(startWidth + startX - clientX, false);
+		const moveDrag = (clientX) => applyWidth(splitterStartWidth + splitterStartX - clientX, false);
 		const endDrag = (type, event) => {
-			if (dragType !== type || (type === "pointer" && event.pointerId !== pointerId)) return;
-			dragType = null;
-			pointerId = null;
+			if (splitterDragType !== type || (type === "pointer" && event.pointerId !== splitterPointerId)) return;
+			splitterDragType = null;
+			splitterPointerId = null;
 			document.documentElement.classList.remove("kui-resizing");
 			applyWidth(currentWidth(), true);
 		};
-		document.addEventListener("pointerdown", (event) => beginDrag(event, "pointer"), true);
-		document.addEventListener("mousedown", (event) => beginDrag(event, "mouse"), true);
-		document.addEventListener("pointermove", (event) => {
-			if (dragType === "pointer" && event.pointerId === pointerId) moveDrag(event.clientX);
-		});
-		document.addEventListener("pointerup", (event) => endDrag("pointer", event));
-		document.addEventListener("pointercancel", (event) => endDrag("pointer", event));
-		document.addEventListener("mousemove", (event) => {
-			if (dragType === "mouse") moveDrag(event.clientX);
-		});
-		document.addEventListener("mouseup", (event) => endDrag("mouse", event));
+
+		if (!splitterWidthLoaded) {
+			let savedWidth = defaultWidth;
+			try {
+				const stored = Number.parseInt(localStorage.getItem("kui.detailPaneWidth"), 10);
+				if (Number.isFinite(stored)) savedWidth = stored;
+			} catch {
+				// The default width remains usable when persistent storage is unavailable.
+			}
+			splitterWidthLoaded = true;
+			applyWidth(savedWidth, false);
+		} else {
+			applyWidth(currentWidth(), false);
+		}
+
+		if (!splitterListenersInstalled) {
+			document.addEventListener("pointerdown", (event) => beginDrag(event, "pointer"), true);
+			document.addEventListener("mousedown", (event) => beginDrag(event, "mouse"), true);
+			document.addEventListener("pointermove", (event) => {
+				if (splitterDragType === "pointer" && event.pointerId === splitterPointerId) moveDrag(event.clientX);
+			});
+			document.addEventListener("pointerup", (event) => endDrag("pointer", event));
+			document.addEventListener("pointercancel", (event) => endDrag("pointer", event));
+			document.addEventListener("mousemove", (event) => {
+				if (splitterDragType === "mouse") moveDrag(event.clientX);
+			});
+			document.addEventListener("mouseup", (event) => endDrag("mouse", event));
+			window.addEventListener("resize", () => applyWidth(currentWidth(), false));
+			splitterListenersInstalled = true;
+		}
+
 		splitter.addEventListener("keydown", (event) => {
+			if (event.target !== activeSplitter) return;
 			const current = currentWidth();
 			if (event.key === "ArrowLeft") applyWidth(current + 20, true);
 			else if (event.key === "ArrowRight") applyWidth(current - 20, true);
@@ -1454,7 +1510,6 @@ window.kui = (function () {
 			else return;
 			event.preventDefault();
 		});
-		window.addEventListener("resize", () => applyWidth(currentWidth(), false));
 	}
 
 	// ---- theme toggle ----
@@ -1844,6 +1899,7 @@ window.kui = (function () {
 		}
 
 		if (target.id === "content") {
+			initSplitter();
 			syncActiveResourceFromPath(e.detail.requestConfig && e.detail.requestConfig.path);
 		}
 
@@ -1881,6 +1937,7 @@ window.kui = (function () {
 		startLogs,
 		startShell,
 		openDebugShell,
+		openNodeShell,
 		toggleLogs,
 		clearLogs,
 		filterLogs,

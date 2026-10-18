@@ -1,11 +1,12 @@
 {{define "debugshell"}}
 <div class="detail-header">
   <div class="detail-header-row">
-    <div><strong>Debug shell</strong><div class="text-dim">{{.Pod}} &middot; {{.Namespace}}</div></div>
-    <button type="button" class="btn btn-danger" hx-post="{{.KillURL}}" hx-target="#detail-pane" hx-swap="innerHTML" hx-confirm="Stop debug shell {{.Pod}}?">Stop shell</button>
+    <div><strong>{{if .NodeName}}Node shell{{else}}Debug shell{{end}}</strong><div class="text-dim">{{if .NodeName}}{{.NodeName}} &middot; {{end}}{{.Pod}} &middot; {{.Namespace}}</div></div>
+    <button type="button" class="btn btn-danger" hx-post="{{.KillURL}}" hx-target="#detail-pane" hx-swap="innerHTML" hx-confirm="Stop {{if .NodeName}}node shell{{else}}debug shell{{end}} {{.Pod}}?">Stop shell</button>
   </div>
 </div>
 <div class="detail-body">
+  {{if .NodeName}}<div class="text-dim">Host root is mounted read-only at /host; the container is not privileged.</div>{{end}}
   <div class="stream-controls">
     <span id="shell-status" role="status" aria-live="polite">Connecting…</span>
     <button type="button" class="btn" onclick="kui.startShell(document.getElementById('term-pane').dataset.execUrl)">Reconnect</button>

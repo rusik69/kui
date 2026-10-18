@@ -54,6 +54,10 @@
     {{end}}
 
     {{if .IsNode}}
+    <div class="section-title">Node shell</div>
+    <button class="btn" type="button" data-node-name="{{.Name}}" onclick="kui.openNodeShell(this.dataset.nodeName)">Open node shell</button>
+    <div class="text-dim">Requires a selected namespace. Joins the host network, PID, and IPC namespaces; host root is mounted read-only at /host. The container is not privileged.</div>
+
     <div class="section-title">Info</div>
     <dl class="kv-grid">
       <dt>Addresses</dt><dd>{{range .Addresses}}{{.Type}}: {{.Address}}<br>{{end}}</dd>

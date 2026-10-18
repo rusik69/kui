@@ -43,6 +43,37 @@ func DebugPodShellSpec(name, namespace, image string) *corev1.Pod {
 	}
 }
 
+// NodeDebugShellSpec builds a non-privileged ephemeral pod pinned to nodeName.
+// It joins the host namespaces and exposes the host root at /host read-only.
+func NodeDebugShellSpec(namespace, nodeName, image string) *corev1.Pod {
+	pod := DebugPodShellSpec("", namespace, image)
+	pod.GenerateName = "kui-node-shell-"
+	pod.Labels["kui.dev/node-shell"] = "true"
+	pod.Spec.NodeName = nodeName
+	pod.Spec.HostNetwork = true
+	pod.Spec.HostPID = true
+	pod.Spec.HostIPC = true
+	pod.Spec.Tolerations = []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
+
+	automountServiceAccountToken := false
+	pod.Spec.AutomountServiceAccountToken = &automountServiceAccountToken
+	hostRoot := corev1.HostPathDirectory
+	pod.Spec.Volumes = []corev1.Volume{{
+		Name: "host-root",
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: "/", Type: &hostRoot,
+		}},
+	}}
+	pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{{
+		Name: "host-root", MountPath: "/host", ReadOnly: true,
+	}}
+	allowPrivilegeEscalation := false
+	pod.Spec.Containers[0].SecurityContext = &corev1.SecurityContext{
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+	}
+	return pod
+}
+
 // CleanupEphemeralDebugPods removes finished kui debug pods from the
 // namespace. Pending and running pods belong to active sessions and are kept.
 // A failure to delete one finished pod is not fatal — the best effort is made

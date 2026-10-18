@@ -135,6 +135,7 @@ type YAMLDiffData struct {
 // DebugShellData backs the "debugshell" fragment.
 type DebugShellData struct {
 	Pod, Namespace, ExecWSURLBase string
+	NodeName                      string // non-empty for a shell attached to a node
 	KillURL                       string // POST target for the kill button; empties the detail pane
 }
 
@@ -145,6 +146,7 @@ type AttentionItem struct {
 
 // OverviewData backs the "overview" fragment: cluster-wide summary tiles.
 type OverviewData struct {
+	Context, Namespace                string
 	NodeCount, NodeReadyCount         int
 	NamespaceCount                    int
 	PodRunning, PodPending, PodFailed int

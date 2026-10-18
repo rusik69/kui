@@ -24,6 +24,8 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
+		data.Context = ctxName
+		data.Namespace = ns
 		s.render(w, "overview", data)
 		return
 	}

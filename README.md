@@ -49,10 +49,12 @@ WebKit webview; it needs no separately installed webview runtime.
   Services/Ingresses/Endpoints, ConfigMaps/Secrets, PVCs/PVs/StorageClasses,
   Nodes/Namespaces/Events, plus any CRD via live API discovery ("All resources").
 - Live-updating tables (watch -> SSE), pod logs with filtering/pause/tail controls,
-  interactive pod exec, and an ephemeral debug-pod shell with an explicit stop control.
+  interactive pod exec, and an ephemeral pod debug shell with an explicit stop control.
+- Open a node debug shell from a node's detail pane. It joins host network/PID/IPC
+  namespaces and mounts the host root read-only at `/host`; it is not a privileged container.
 - Resize the detail pane by dragging its divider or focusing it and using the
-  arrow keys. Terminal & SSH requires a selected namespace and provides visible
-  connection status plus a reconnect control.
+  arrow keys. Shells require a selected namespace and provide visible connection status
+  plus a reconnect control.
 - Filter resource tables with Kubernetes label/field selectors, sort by clicking
   or keyboard, copy names/namespaces, and page through API results.
   (200 rows by default; choose 1–1,000 rows/page and persist density.)
@@ -84,8 +86,11 @@ Grant only the verbs required for the actions users need:
   `pods/eviction`.
 - Pod logs, exec, and port-forward: `get` on `pods/log`, `create` on
   `pods/exec`, and `create` on `pods/portforward`, respectively.
-- Debug shells: `list`, `create`, `get`, and `delete` Pods in the selected
+- Pod debug shells: `list`, `create`, `get`, and `delete` Pods in the selected
   namespace.
+- Node debug shells need those Pod verbs plus cluster policy that permits pinning
+  a Pod to a node, host namespaces, and a read-only host-root mount. Node shells
+  do not receive a service-account token.
 - Resource metrics are optional and require `get` on
   `pods.metrics.k8s.io` and `nodes.metrics.k8s.io`.
 
@@ -125,12 +130,14 @@ probes the Kubernetes API.
   browsing.
 - **Logs, exec, or forwarding denied:** check the corresponding `pods/log`,
   `pods/exec`, or `pods/portforward` permission in the active namespace.
+- **Node shell denied:** check Pod create permissions and whether Pod Security
+  Admission or other cluster policy permits the requested host namespaces and
+  hostPath. The node shell is intentionally unavailable with namespace `All`.
 
 ## Non-goals
 
-- Real SSH into nodes — no generic node-level credential story exists; the
-  "Terminal & SSH" nav item launches an ephemeral shell pod (configurable with
-  `--debug-image`) instead.
+- SSH protocol access to nodes — kui provides a node debug shell through a pod,
+  not SSH credentials or an SSH daemon.
 - Multi-user auth / in-cluster deployment — this is a local, single-user tool
   that trusts whatever your kubeconfig already grants.
 

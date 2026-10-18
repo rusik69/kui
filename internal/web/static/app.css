@@ -865,6 +865,9 @@ body[data-row-density="comfortable"] .resource-table td {
 	padding: 5px 0;
 	font-size: 12.5px;
 }
+.object-row-link { border-radius: var(--radius); cursor: pointer; padding-inline: 6px; }
+.object-row-link:hover { background: var(--bg-hover); }
+.attention-link:hover { text-decoration: underline; }
 
 .object-count { text-align: right; color: var(--text-dim); }
 
@@ -1115,6 +1118,10 @@ button:disabled, input:disabled, select:disabled {
 	transition: border-color 120ms ease, transform 120ms ease;
 }
 .stat-tile:hover { border-color: var(--text-dim); transform: translateY(-1px); }
+.stat-tile-link { cursor: pointer; }
+.stat-tile-link:focus-visible,
+.object-row-link:focus-visible,
+.attention-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stat-tile.warn { border-left: 3px solid var(--yellow); background: color-mix(in srgb, var(--yellow) 7%, var(--bg-raised)); }
 .stat-tile.danger { border-left: 3px solid var(--red); background: color-mix(in srgb, var(--red) 7%, var(--bg-raised)); }
 .stat-tile .value { font-variant-numeric: tabular-nums; line-height: 1.15; }

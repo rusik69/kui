@@ -117,6 +117,35 @@ func (s *Server) handleDebugShell(w http.ResponseWriter, r *http.Request) {
 
 	pod := k8s.DebugPodShellSpec("", ns, s.debugImage)
 	pod.GenerateName = "kui-debug-"
+	s.startDebugShell(w, r, c, ctxName, ns, pod, "")
+}
+
+func (s *Server) handleNodeDebugShell(w http.ResponseWriter, r *http.Request) {
+	ctxName, ns, nodeName := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("node")
+	if ns == "" || ns == "_" || ns == "_all" {
+		http.Error(w, "select a namespace before starting a node shell", http.StatusBadRequest)
+		return
+	}
+	if nodeName == "" {
+		http.Error(w, "node name is required", http.StatusBadRequest)
+		return
+	}
+
+	c, err := s.clients(ctxName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := k8s.CleanupEphemeralDebugPods(r.Context(), c, ns); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	pod := k8s.NodeDebugShellSpec(ns, nodeName, s.debugImage)
+	s.startDebugShell(w, r, c, ctxName, ns, pod, nodeName)
+}
+
+func (s *Server) startDebugShell(w http.ResponseWriter, r *http.Request, c *k8s.Clients, ctxName, ns string, pod *corev1.Pod, nodeName string) {
 	created, err := c.Clientset.CoreV1().Pods(ns).Create(r.Context(), pod, metav1.CreateOptions{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -142,7 +171,7 @@ func (s *Server) handleDebugShell(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.render(w, "debugshell", DebugShellData{
-		Pod: podName, Namespace: ns,
+		Pod: podName, Namespace: ns, NodeName: nodeName,
 		ExecWSURLBase: fmt.Sprintf("/c/%s/%s/pods/%s/exec", ctxName, ns, podName),
 		KillURL:       fmt.Sprintf("/c/%s/%s/debug-shell/%s/kill", ctxName, ns, podName),
 	})

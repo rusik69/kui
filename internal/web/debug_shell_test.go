@@ -74,3 +74,17 @@ users:
 		t.Errorf("stop route missing success toast: %s", got)
 	}
 }
+
+func TestDebugShellRequiresConcreteNamespace(t *testing.T) {
+	server := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/c/test/_all/debug-shell", nil)
+	req.SetPathValue("ctx", "test")
+	req.SetPathValue("ns", "_all")
+	recorder := httptest.NewRecorder()
+
+	server.handleDebugShell(recorder, req)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("debug shell status = %d, want %d: %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+}

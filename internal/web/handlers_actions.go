@@ -99,6 +99,10 @@ func (s *Server) handleExec(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDebugShell(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns := r.PathValue("ctx"), r.PathValue("ns")
+	if ns == "" || ns == "_all" {
+		http.Error(w, "select a namespace before starting a debug shell", http.StatusBadRequest)
+		return
+	}
 
 	c, err := s.clients(ctxName)
 	if err != nil {

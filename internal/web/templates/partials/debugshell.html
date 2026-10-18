@@ -6,7 +6,10 @@
   </div>
 </div>
 <div class="detail-body">
-  <div id="term-pane" class="term-pane"></div>
+  <div class="stream-controls">
+    <span id="shell-status" role="status" aria-live="polite">Connecting…</span>
+    <button type="button" class="btn" onclick="kui.startShell(document.getElementById('term-pane').dataset.execUrl)">Reconnect</button>
+  </div>
+  <div id="term-pane" class="term-pane" data-exec-url="{{.ExecWSURLBase}}"></div>
 </div>
-<script>kui.startShell('{{.ExecWSURLBase}}')</script>
 {{end}}

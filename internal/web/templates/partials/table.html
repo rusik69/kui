@@ -21,24 +21,26 @@
 </div>
 {{end}}
 {{if .MetricsURL}}<div hx-get="{{.MetricsURL}}" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>{{end}}
+<div class="resource-table-wrap">
 <table class="resource-table" id="kui-table">
+  <caption class="sr-only">{{.Kind}} resources in the current namespace scope</caption>
   <thead>
     <tr>
-      {{if .Selectable}}<th class="select-col"><input type="checkbox" id="select-all-rows"></th>{{end}}
+      {{if .Selectable}}<th class="select-col" scope="col"><input type="checkbox" id="select-all-rows" aria-label="Select all visible resources"></th>{{end}}
       {{if .ShowNamespace}}<th scope="col" tabindex="0" aria-sort="none">Namespace</th>{{end}}
       {{range .Columns}}<th scope="col" tabindex="0" aria-sort="none">{{.}}</th>{{end}}
     </tr>
   </thead>
   <tbody>
     {{if not .Rows}}
-    <tr><td colspan="{{.HeaderColumnCount}}" class="empty-state">No {{.Kind}} resources found</td></tr>
+    <tr><td colspan="{{.HeaderColumnCount}}" class="empty-state">No {{.Kind}} resources found in this scope.</td></tr>
     {{end}}
     {{range $row := .Rows}}
     {{if $.RowsAreKinds}}
-    <tr hx-get="{{$row.DetailURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
+    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$row.DetailURL}}"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}">
     {{else}}
-    <tr hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"
+    <tr tabindex="0" aria-selected="false" hx-get="{{$row.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"
         data-id="{{$row.DetailURL}}" data-name="{{$row.Name}}"
         {{if $.HasMetrics}}data-metric-key="{{metricKey $row.Namespace $row.Name}}"{{end}}>
     {{end}}
@@ -49,7 +51,8 @@
       {{end}}
     </tr>
     {{end}}
-    <tr data-filter-empty style="display:none"><td colspan="{{.HeaderColumnCount}}" class="empty-state">No resources match this filter</td></tr>
+    <tr data-filter-empty style="display:none"><td colspan="{{.HeaderColumnCount}}" class="empty-state" role="status" aria-live="polite">No resources match this filter. Clear the filter to see all rows.</td></tr>
   </tbody>
 </table>
+</div>
 {{end}}

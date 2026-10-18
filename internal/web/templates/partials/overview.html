@@ -1,6 +1,6 @@
 {{define "overview"}}
 <div class="toolbar">
-  <strong>Cluster Overview</strong>
+  <h1 class="toolbar-title">Cluster Overview</h1>
 </div>
 <div class="tile-grid">
   <div class="stat-tile">
@@ -33,17 +33,23 @@
 <div class="capacity-row">
   <div class="capacity-bar">
     <div class="capacity-label"><span>CPU</span><span>{{pct .CPURequestedMilli .CPUAllocatableMilli}}%</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:{{pct .CPURequestedMilli .CPUAllocatableMilli}}%"></div></div>
+    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .CPURequestedMilli .CPUAllocatableMilli}}" aria-label="CPU requested capacity">
+      <div class="bar-fill {{if ge (pct .CPURequestedMilli .CPUAllocatableMilli) 80}}bar-fill-warning{{end}}" style="width:{{pct .CPURequestedMilli .CPUAllocatableMilli}}%"></div>
+    </div>
     <div class="capacity-sub">{{cpuFmt .CPURequestedMilli}} requested of {{cpuFmt .CPUAllocatableMilli}}</div>
   </div>
   <div class="capacity-bar">
     <div class="capacity-label"><span>Memory</span><span>{{pct .MemRequestedBytes .MemAllocatableBytes}}%</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:{{pct .MemRequestedBytes .MemAllocatableBytes}}%"></div></div>
+    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .MemRequestedBytes .MemAllocatableBytes}}" aria-label="Memory requested capacity">
+      <div class="bar-fill {{if ge (pct .MemRequestedBytes .MemAllocatableBytes) 80}}bar-fill-warning{{end}}" style="width:{{pct .MemRequestedBytes .MemAllocatableBytes}}%"></div>
+    </div>
     <div class="capacity-sub">{{memFmt .MemRequestedBytes}} requested of {{memFmt .MemAllocatableBytes}}</div>
   </div>
   <div class="capacity-bar">
     <div class="capacity-label"><span>Pods</span><span>{{pct .PodsUsed .PodsAllocatable}}%</span></div>
-    <div class="bar-track"><div class="bar-fill" style="width:{{pct .PodsUsed .PodsAllocatable}}%"></div></div>
+    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .PodsUsed .PodsAllocatable}}" aria-label="Pods allocated">
+      <div class="bar-fill {{if ge (pct .PodsUsed .PodsAllocatable) 80}}bar-fill-warning{{end}}" style="width:{{pct .PodsUsed .PodsAllocatable}}%"></div>
+    </div>
     <div class="capacity-sub">{{.PodsUsed}} of {{.PodsAllocatable}}</div>
   </div>
 </div>
@@ -54,7 +60,7 @@
   {{range .ObjectCounts}}
   <div class="object-row">
     <span class="object-kind">{{.Kind}}</span>
-    <span class="bar-track"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
+    <span class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.BarPercent}}" aria-label="{{.Kind}} count share"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
     <span class="object-count">{{.Count}}</span>
   </div>
   {{end}}

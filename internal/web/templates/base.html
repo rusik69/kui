@@ -1,8 +1,9 @@
 {{define "page"}}
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <script>document.documentElement.setAttribute('data-theme', localStorage.getItem('kui.theme') || 'dark')</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta charset="utf-8">
 <meta name="kui-csrf-token" content="{{.CSRFToken}}">
 <title>kui &middot; {{.ContextName}}</title>
@@ -14,46 +15,51 @@
 <script src="/static/vendor/xterm-addon-fit.js"></script>
 </head>
 <body data-ctx="{{.Context}}">
+<a class="skip-link" href="#content">Skip to main content</a>
 {{template "icons"}}
 <div id="counts-poller" hx-get="/c/{{.Context}}/counts?ns={{.Namespace}}" hx-trigger="load, every 20s"
      hx-target="this" hx-swap="innerHTML" style="display:none"></div>
 <div class="app">
   {{template "sidebar" .}}
-  <div class="main">
+  <main class="main" id="main-content">
     <div class="topbar">
-      <select onchange="location.href='/c/'+this.value">
-        {{range .Contexts}}<option value="{{.ID}}" {{if .Current}}selected{{end}}>{{.Name}}</option>{{end}}
-      </select>
-      <input id="namespace-filter" type="search" placeholder="Filter namespaces…" aria-label="Filter namespaces"
-             oninput="kui.filterNamespaceOptions(this.value)">
-      <select id="namespace-select" name="namespace" aria-label="Namespace" onchange="kui.changeNamespace(this.value)">
-        <option value="_all" {{if eq .Namespace "_all"}}selected{{end}}>All namespaces</option>
-        {{if and (ne .Namespace "_all") (not (hasString .Namespaces .Namespace))}}<option value="{{.Namespace}}" selected>{{.Namespace}}</option>{{end}}
-        {{range .Namespaces}}<option value="{{.}}" {{if eq . $.Namespace}}selected{{end}}>{{.}}</option>{{end}}
-      </select>
-      <div class="search-trigger" role="button" tabindex="0" aria-label="Open search"
-           onclick="kui.openPalette()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();kui.openPalette()}">
+      <div class="topbar-scope topbar-context" role="group" aria-label="Cluster context">
+        <label class="sr-only" for="context-select">Kubernetes context</label>
+        <select id="context-select" aria-label="Kubernetes context" onchange="location.href='/c/'+this.value">
+          {{range .Contexts}}<option value="{{.ID}}" {{if .Current}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <div class="topbar-scope topbar-namespace" role="group" aria-label="Namespace scope">
+        <input id="namespace-filter" type="search" placeholder="Filter namespaces…" aria-label="Filter namespaces"
+               oninput="kui.filterNamespaceOptions(this.value)">
+        <select id="namespace-select" name="namespace" aria-label="Namespace" onchange="kui.changeNamespace(this.value)">
+          <option value="_all" {{if eq .Namespace "_all"}}selected{{end}}>All namespaces</option>
+          {{if and (ne .Namespace "_all") (not (hasString .Namespaces .Namespace))}}<option value="{{.Namespace}}" selected>{{.Namespace}}</option>{{end}}
+          {{range .Namespaces}}<option value="{{.}}" {{if eq . $.Namespace}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </div>
+      <button type="button" class="search-trigger" aria-label="Open search" aria-keyshortcuts="Control+K Meta+K" onclick="kui.openPalette()">
         <svg class="icon"><use href="#icon-search"/></svg>
         <span>Search objects, commands and hosts</span>
         <span class="kbd-hint">&#8984;K</span>
-      </div>
-      <input type="text" placeholder="Filter…" id="row-filter" onkeyup="kui.filterRows(this.value)">
-      <button type="button" class="btn" onclick="kui.clearRowFilter()" aria-label="Clear row filter">Clear filter</button>
-      <button type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" onclick="kui.toggleTheme()">
+      </button>
+      <input type="search" placeholder="Filter resources…" id="row-filter" aria-label="Filter current resource table" oninput="kui.filterRows(this.value)">
+      <button type="button" class="btn" onclick="kui.clearRowFilter()" aria-label="Clear resource filter">Clear filter</button>
+      <button id="theme-toggle" type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" aria-pressed="false" onclick="kui.toggleTheme()">
         <svg class="icon" id="theme-icon"><use href="#icon-moon"/></svg>
       </button>
     </div>
-    <nav class="breadcrumb">
+    <nav class="breadcrumb" aria-label="Current location">
       <span>{{.ContextName}}</span>
       <svg class="icon"><use href="#icon-chevron"/></svg>
       <span>{{if eq .Namespace "_all"}}all namespaces{{else}}{{.Namespace}}{{end}}</span>
       <svg class="icon"><use href="#icon-chevron"/></svg>
-      <span class="breadcrumb-resource" id="breadcrumb-resource" onclick="kui.closeDetail()">{{title .Resource}}</span><span id="breadcrumb-name"></span>
+      <button type="button" class="breadcrumb-resource" id="breadcrumb-resource" title="{{title .Resource}}" onclick="kui.closeDetail()">{{title .Resource}}</button><span id="breadcrumb-name"></span>
     </nav>
-    <div class="content" id="content">
+    <div class="content" id="content" tabindex="-1">
       {{template "content" .}}
     </div>
-  </div>
+  </main>
 </div>
 <div class="palette-overlay" id="palette-overlay" style="display:none" aria-hidden="true" onclick="if(event.target===this) kui.closePalette()">
   <section class="palette" role="dialog" aria-modal="true" aria-labelledby="palette-title">
@@ -77,11 +83,12 @@
   </div>
 </div>
 <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
-<div class="statusbar" id="statusbar" data-watch-state="connecting"
-     hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML">
-  Live
+<div class="statusbar" id="statusbar" data-watch-state="connecting">
+  <span id="cluster-status" hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML" data-cluster-state="loading">
+    Loading cluster status…
+  </span>
+  <span id="watch-state-label" class="watch-state-label" role="status" aria-live="polite" aria-atomic="true">Connecting to live updates</span>
 </div>
-<div id="toast-container" class="toast-container"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>
@@ -89,16 +96,16 @@
 
 {{define "content"}}
 {{if .ConnError}}
-<div class="conn-error">
+<div class="conn-error" role="alert">
   Can't reach <strong>{{.ContextName}}</strong>: {{.ConnError}}
   &mdash; switch context above, or fix the credentials and reload.
 </div>
 {{end}}
-<div class="bulk-bar" id="bulk-bar" style="display:none">
+<div class="bulk-bar" id="bulk-bar" style="display:none" role="status" aria-live="polite">
   <span id="bulk-count"></span>
   <button class="btn btn-danger" onclick="kui.bulkDelete()">Delete selected</button>
   <button class="btn" onclick="kui.clearSelection()">Clear</button>
-</div>
+    </div>
 <div class="content-row">
   <div class="list-pane" id="list-pane"
        hx-ext="sse" sse-connect="{{.WatchURL}}"

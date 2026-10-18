@@ -28,6 +28,9 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
   Nodes/Namespaces/Events, plus any CRD via live API discovery ("All resources").
 - Live-updating tables (watch -> SSE), pod logs with filtering/pause/tail controls,
   interactive pod exec, and an ephemeral debug-pod shell with an explicit stop control.
+- Resize the detail pane by dragging its divider or focusing it and using the
+  arrow keys. Terminal & SSH requires a selected namespace and provides visible
+  connection status plus a reconnect control.
 - Filter resource tables with Kubernetes label/field selectors, sort by clicking
   or keyboard, copy names/namespaces, and page through API results.
   (200 rows by default; choose 1–1,000 rows/page and persist density.)

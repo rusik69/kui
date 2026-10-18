@@ -1,20 +1,22 @@
 {{define "sidebar"}}
-<div class="sidebar">
+<nav class="sidebar" aria-label="Resource navigation">
   <div class="sidebar-header">kui</div>
   <div class="sidebar-section">Cluster</div>
-  <div class="sidebar-link {{if eq .Resource "overview"}}active{{end}}" data-resource="overview" data-label="Overview"
+  <a class="sidebar-link {{if eq .Resource "overview"}}active{{end}}" data-resource="overview" data-label="Overview"
+       href="/c/{{.Context}}/{{.Namespace}}/overview" {{if eq .Resource "overview"}}aria-current="page"{{end}}
        hx-get="/c/{{.Context}}/{{.Namespace}}/overview" hx-target="#content" hx-swap="innerHTML"
        hx-push-url="/c/{{.Context}}/{{.Namespace}}/overview" onclick="kui.selectSidebarLink(this)">
     <svg class="icon"><use href="#icon-overview"/></svg>Overview
-  </div>
-  <div class="sidebar-link" hx-post="/c/{{.Context}}/{{.Namespace}}/debug-shell" hx-target="#detail-pane" hx-swap="innerHTML">
+  </a>
+  <button type="button" class="sidebar-link" onclick="kui.openDebugShell()">
     <svg class="icon"><use href="#icon-terminal"/></svg>Terminal &amp; SSH
-  </div>
+  </button>
 
   {{range $group := .Groups}}
   <div class="sidebar-section"><svg class="icon"><use href="#{{groupIcon $group}}"/></svg>{{$group}}</div>
   {{range index $.GroupKinds $group}}
-  <div class="sidebar-link {{if eq .Name $.Resource}}active{{end}}" data-count-for="{{.Name}}" data-resource="{{.Name}}" data-label="{{.Kind}}"
+  <a class="sidebar-link {{if eq .Name $.Resource}}active{{end}}" data-count-for="{{.Name}}" data-resource="{{.Name}}" data-label="{{.Kind}}"
+       href="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" {{if eq .Name $.Resource}}aria-current="page"{{end}}
        hx-get="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}"
        hx-target="#content" hx-swap="innerHTML"
        hx-push-url="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" onclick="kui.selectSidebarLink(this)">
@@ -23,15 +25,16 @@
       <span class="sidebar-count"></span>
       <span class="sidebar-count-dot dot dot-red" style="display:none"></span>
     </span>
-  </div>
+  </a>
   {{end}}
   {{end}}
 
   <div class="sidebar-section">Discovery</div>
-  <div class="sidebar-link {{if eq .Resource "all"}}active{{end}}" data-resource="all" data-label="All resources"
+  <a class="sidebar-link {{if eq .Resource "all"}}active{{end}}" data-resource="all" data-label="All resources"
+       href="/c/{{.Context}}/{{.Namespace}}/all" {{if eq .Resource "all"}}aria-current="page"{{end}}
        hx-get="/c/{{.Context}}/{{.Namespace}}/all" hx-target="#content" hx-swap="innerHTML"
        hx-push-url="/c/{{.Context}}/{{.Namespace}}/all" onclick="kui.selectSidebarLink(this)">
     <svg class="icon"><use href="#icon-all"/></svg>All resources
-  </div>
-</div>
+  </a>
+    </nav>
 {{end}}

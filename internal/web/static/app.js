@@ -1,10 +1,16 @@
 window.kui = (function () {
 	function showTab(btn, panelId) {
-		document.querySelectorAll(".detail-tab-panel").forEach((p) => (p.style.display = "none"));
-		const target = document.getElementById(panelId);
-		if (target) target.style.display = "block";
-		document.querySelectorAll(".tab-row .tab-btn").forEach((b) => b.classList.remove("active"));
-		btn.classList.add("active");
+		document.querySelectorAll(".detail-tab-panel").forEach((panel) => {
+			const selected = panel.id === panelId;
+			panel.hidden = !selected;
+			panel.style.display = selected ? "block" : "none";
+		});
+		document.querySelectorAll(".tab-row .tab-btn").forEach((tab) => {
+			const selected = tab === btn;
+			tab.classList.toggle("active", selected);
+			tab.setAttribute("aria-selected", String(selected));
+			tab.tabIndex = selected ? 0 : -1;
+		});
 	}
 
 	function wsURL(path) {
@@ -133,12 +139,20 @@ window.kui = (function () {
 		disposeTerminal();
 		const pane = document.getElementById("term-pane");
 		if (!pane) return;
+		setStreamStatus("shell-status", "Connecting…");
 		pane.innerHTML = "";
 		const container = document.getElementById("shell-container")?.value || "";
 		const params = new URLSearchParams();
 		if (container) params.set("container", container);
 
-		const term = new Terminal({ fontSize: 13, theme: { background: "#000000" } });
+		const terminalColors = getComputedStyle(document.documentElement);
+		const term = new Terminal({
+			fontSize: 13,
+			theme: {
+				background: terminalColors.getPropertyValue("--surface-code").trim(),
+				foreground: terminalColors.getPropertyValue("--text-code").trim(),
+			},
+		});
 		const fit = new FitAddon.FitAddon();
 		term.loadAddon(fit);
 		term.open(pane);
@@ -148,7 +162,16 @@ window.kui = (function () {
 		window.addEventListener("resize", resize);
 		requestAnimationFrame(resize);
 
-		const ws = new WebSocket(wsURL(base + (params.size ? "?" + params.toString() : "")));
+		let ws;
+		try {
+			ws = new WebSocket(wsURL(base + (params.size ? "?" + params.toString() : "")));
+		} catch {
+			if (observer) observer.disconnect();
+			window.removeEventListener("resize", resize);
+			term.dispose();
+			setStreamStatus("shell-status", "Connection failed");
+			return;
+		}
 		const session = { term, ws, observer, resize };
 		terminalSession = session;
 		ws.onopen = () => {
@@ -168,6 +191,30 @@ window.kui = (function () {
 		term.onData((data) => {
 			if (ws.readyState === WebSocket.OPEN) ws.send(data);
 		});
+	}
+	function openDebugShell() {
+		const namespace = document.getElementById("namespace-select");
+		if (!namespace || !namespace.value || namespace.value === "_all") {
+			showToast({ level: "error", message: "Choose a namespace before starting a debug shell." });
+			if (namespace) namespace.focus();
+			return;
+		}
+		const pane = document.getElementById("detail-pane");
+		if (!pane || !window.htmx) {
+			showToast({ level: "error", message: "The debug shell interface is unavailable." });
+			return;
+		}
+		const splitter = document.getElementById("detail-splitter");
+		pane.classList.add("open");
+		if (splitter) splitter.style.display = "block";
+		const loading = document.createElement("div");
+		loading.className = "loading-state";
+		loading.setAttribute("role", "status");
+		loading.textContent = "Starting temporary shell…";
+		pane.replaceChildren(loading);
+		const context = document.body.dataset.ctx;
+		const path = "/c/" + encodeURIComponent(context) + "/" + encodeURIComponent(namespace.value) + "/debug-shell";
+		window.htmx.ajax("POST", path, { target: "#detail-pane", swap: "innerHTML" });
 	}
 
 	function copyTerminalSelection() {
@@ -357,6 +404,7 @@ window.kui = (function () {
 		const el = document.getElementById("breadcrumb-name");
 		if (!el) return;
 		el.textContent = name ? " › " + name : "";
+		el.title = name || "";
 	}
 
 	// Sidebar links swap only #content via htmx — the sidebar itself and the
@@ -370,11 +418,20 @@ window.kui = (function () {
 	// they can never disagree regardless of how #content got navigated
 	// (sidebar click, command palette, or an "All resources" directory row).
 	function applyActiveResource(resource, label) {
-		document.querySelectorAll(".sidebar-link.active").forEach((l) => l.classList.remove("active"));
+		document.querySelectorAll(".sidebar-link.active").forEach((link) => {
+			link.classList.remove("active");
+			link.removeAttribute("aria-current");
+		});
 		const link = document.querySelector('.sidebar-link[data-resource="' + cssEscape(resource) + '"]');
-		if (link) link.classList.add("active");
+		if (link) {
+			link.classList.add("active");
+			link.setAttribute("aria-current", "page");
+		}
 		const resourceEl = document.getElementById("breadcrumb-resource");
-		if (resourceEl) resourceEl.textContent = label || resource;
+		if (resourceEl) {
+			resourceEl.textContent = label || resource;
+			resourceEl.title = label || resource;
+		}
 		setBreadcrumbName("");
 	}
 
@@ -634,9 +691,15 @@ window.kui = (function () {
 			}
 
 			if (lp.dataset.selectedRow) {
-				tbody.querySelectorAll("tr.selected").forEach((tr) => tr.classList.remove("selected"));
+				tbody.querySelectorAll("tr.selected").forEach((tr) => {
+					tr.classList.remove("selected");
+					tr.setAttribute("aria-selected", "false");
+				});
 				const match = tbody.querySelector('tr[data-id="' + cssEscape(lp.dataset.selectedRow) + '"]');
-				if (match) match.classList.add("selected");
+				if (match) {
+					match.classList.add("selected");
+					match.setAttribute("aria-selected", "true");
+				}
 			}
 
 			const checked = selectedRowIDs(lp);
@@ -672,6 +735,26 @@ window.kui = (function () {
 	}
 
 	function onTableKeydown(e) {
+		const tab = e.target.closest(".tab-row [role='tab']");
+		if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+			const tabs = Array.from(tab.parentElement.querySelectorAll("[role='tab']"));
+			const current = tabs.indexOf(tab);
+			const nextIndex = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 :
+				(current + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+			const next = tabs[nextIndex];
+			showTab(next, next.getAttribute("aria-controls"));
+			next.focus();
+			e.preventDefault();
+			return;
+		}
+		if (e.key === "Enter" || e.key === " ") {
+			const row = e.target.closest("#kui-table tbody tr[data-id]");
+			if (row && !e.target.closest("input,button,a,select,textarea")) {
+				e.preventDefault();
+				row.click();
+				return;
+			}
+		}
 		if (e.key !== "Enter" && e.key !== " ") return;
 		const th = e.target.closest("#kui-table thead th[tabindex='0']");
 		if (!th) return;
@@ -686,12 +769,16 @@ window.kui = (function () {
 			return;
 		}
 
-		const tr = e.target.closest("#kui-table tbody tr");
+		const tr = e.target.closest("#kui-table tbody tr[data-id]");
 		if (tr) {
 			const lp = tr.closest(".list-pane");
-			if (lp && tr.dataset.id) {
-				lp.querySelectorAll("tr.selected").forEach((x) => x.classList.remove("selected"));
+			if (lp) {
+				lp.querySelectorAll("tr.selected").forEach((row) => {
+					row.classList.remove("selected");
+					row.setAttribute("aria-selected", "false");
+				});
 				tr.classList.add("selected");
+				tr.setAttribute("aria-selected", "true");
 				lp.dataset.selectedRow = tr.dataset.id;
 			}
 			if (tr.dataset.name) setBreadcrumbName(tr.dataset.name);
@@ -985,47 +1072,103 @@ window.kui = (function () {
 
 	function initSplitter() {
 		const splitter = document.getElementById("detail-splitter");
-		if (!splitter) return;
+		const pane = document.getElementById("detail-pane");
+		if (!splitter || !pane) return;
 		const minWidth = 280;
-		const maxWidth = 900;
+		const preferredMaxWidth = 900;
+		const defaultWidth = 420;
+		const currentWidth = () =>
+			parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || defaultWidth;
+		const maxWidth = () => {
+			if (innerWidth <= 720) return Math.max(minWidth, Math.min(preferredMaxWidth, innerWidth * 0.9));
+			const sidebar = document.querySelector(".sidebar");
+			const sidebarWidth = sidebar ? sidebar.getBoundingClientRect().width : 0;
+			return Math.max(minWidth, Math.min(preferredMaxWidth, innerWidth - sidebarWidth - minWidth - (splitter.offsetWidth || 12)));
+		};
 		const applyWidth = (width, save) => {
-			const next = Math.max(minWidth, Math.min(maxWidth, width));
+			const maximum = maxWidth();
+			const next = Math.max(minWidth, Math.min(maximum, width));
 			document.documentElement.style.setProperty("--detail-pane-w", next + "px");
+			splitter.setAttribute("aria-valuemin", String(minWidth));
+			splitter.setAttribute("aria-valuemax", String(maximum));
 			splitter.setAttribute("aria-valuenow", String(next));
-			if (save) localStorage.setItem("kui.detailPaneWidth", String(next));
+			if (save) {
+				try {
+					localStorage.setItem("kui.detailPaneWidth", String(next));
+				} catch {
+					// Resizing remains usable when persistent storage is unavailable.
+				}
+			}
 			return next;
 		};
-		const saved = Number.parseInt(localStorage.getItem("kui.detailPaneWidth"), 10);
-		applyWidth(Number.isFinite(saved) ? saved : 420);
 
-		let dragging = false;
+		let savedWidth = defaultWidth;
+		try {
+			const stored = Number.parseInt(localStorage.getItem("kui.detailPaneWidth"), 10);
+			if (Number.isFinite(stored)) savedWidth = stored;
+		} catch {
+			// The default width remains usable when persistent storage is unavailable.
+		}
+		applyWidth(savedWidth, false);
+
+		let dragType = null;
+		let pointerId = null;
 		let startX = 0;
 		let startWidth = 0;
-		splitter.addEventListener("mousedown", (e) => {
-			dragging = true;
-			startX = e.clientX;
-			startWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
-			e.preventDefault();
+		const isDividerTarget = (event) => {
+			if (splitter.contains(event.target)) return true;
+			if (!pane.classList.contains("open")) return false;
+			const rect = pane.getBoundingClientRect();
+			const hitWidth = Math.max(18, splitter.getBoundingClientRect().width);
+			return event.clientX >= rect.left - hitWidth && event.clientX <= rect.left + hitWidth &&
+				event.clientY >= rect.top && event.clientY <= rect.bottom;
+		};
+		const beginDrag = (event, type) => {
+			if (event.button !== 0 || !isDividerTarget(event) || dragType) return;
+			dragType = type;
+			pointerId = type === "pointer" ? event.pointerId : null;
+			startX = event.clientX;
+			startWidth = currentWidth();
+			document.documentElement.classList.add("kui-resizing");
+			if (type === "pointer") {
+				try {
+					splitter.setPointerCapture(event.pointerId);
+				} catch {
+					// Document listeners keep the drag active if capture is unavailable.
+				}
+			}
+			event.preventDefault();
+			event.stopPropagation();
+		};
+		const moveDrag = (clientX) => applyWidth(startWidth + startX - clientX, false);
+		const endDrag = (type, event) => {
+			if (dragType !== type || (type === "pointer" && event.pointerId !== pointerId)) return;
+			dragType = null;
+			pointerId = null;
+			document.documentElement.classList.remove("kui-resizing");
+			applyWidth(currentWidth(), true);
+		};
+		document.addEventListener("pointerdown", (event) => beginDrag(event, "pointer"), true);
+		document.addEventListener("mousedown", (event) => beginDrag(event, "mouse"), true);
+		document.addEventListener("pointermove", (event) => {
+			if (dragType === "pointer" && event.pointerId === pointerId) moveDrag(event.clientX);
 		});
-		splitter.addEventListener("keydown", (e) => {
-			const current = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
-			if (e.key === "ArrowLeft") applyWidth(current + 20, true);
-			else if (e.key === "ArrowRight") applyWidth(current - 20, true);
-			else if (e.key === "Home") applyWidth(minWidth, true);
-			else if (e.key === "End") applyWidth(maxWidth, true);
+		document.addEventListener("pointerup", (event) => endDrag("pointer", event));
+		document.addEventListener("pointercancel", (event) => endDrag("pointer", event));
+		document.addEventListener("mousemove", (event) => {
+			if (dragType === "mouse") moveDrag(event.clientX);
+		});
+		document.addEventListener("mouseup", (event) => endDrag("mouse", event));
+		splitter.addEventListener("keydown", (event) => {
+			const current = currentWidth();
+			if (event.key === "ArrowLeft") applyWidth(current + 20, true);
+			else if (event.key === "ArrowRight") applyWidth(current - 20, true);
+			else if (event.key === "Home") applyWidth(minWidth, true);
+			else if (event.key === "End") applyWidth(maxWidth(), true);
 			else return;
-			e.preventDefault();
+			event.preventDefault();
 		});
-		document.addEventListener("mousemove", (e) => {
-			if (!dragging) return;
-			applyWidth(startWidth + startX - e.clientX, false);
-		});
-		document.addEventListener("mouseup", () => {
-			if (!dragging) return;
-			dragging = false;
-			const width = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--detail-pane-w"), 10) || 420;
-			applyWidth(width, true);
-		});
+		window.addEventListener("resize", () => applyWidth(currentWidth(), false));
 	}
 
 	// ---- theme toggle ----
@@ -1033,6 +1176,8 @@ window.kui = (function () {
 	function setThemeIcon(theme) {
 		const icon = document.getElementById("theme-icon");
 		if (icon) icon.setAttribute("href", theme === "light" ? "#icon-sun" : "#icon-moon");
+		const button = document.getElementById("theme-toggle");
+		if (button) button.setAttribute("aria-pressed", String(theme === "light"));
 	}
 
 	function initTheme() {
@@ -1076,7 +1221,11 @@ window.kui = (function () {
 
 	// ---- wiring ----
 
-	document.addEventListener("DOMContentLoaded", initSplitter);
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", initSplitter, { once: true });
+	} else {
+		initSplitter();
+	}
 	document.addEventListener("DOMContentLoaded", initTheme);
 
 	document.addEventListener("click", onTableClick);
@@ -1139,14 +1288,17 @@ window.kui = (function () {
 		}
 	});
 
-	document.body.addEventListener("htmx:sseOpen", () => {
+	function setWatchState(state) {
 		const statusbar = document.getElementById("statusbar");
-		if (statusbar) statusbar.dataset.watchState = "connected";
-	});
-	document.body.addEventListener("htmx:sseError", () => {
-		const statusbar = document.getElementById("statusbar");
-		if (statusbar) statusbar.dataset.watchState = "reconnecting";
-	});
+		const label = document.getElementById("watch-state-label");
+		if (statusbar) statusbar.dataset.watchState = state;
+		if (!label) return;
+		label.textContent = state === "connected" ? "Live updates connected" :
+			state === "reconnecting" ? "Live updates reconnecting" : "Connecting to live updates";
+	}
+
+	document.body.addEventListener("htmx:sseOpen", () => setWatchState("connected"));
+	document.body.addEventListener("htmx:sseError", () => setWatchState("reconnecting"));
 
 	// Intercepts every hx-confirm-bearing element globally — no per-button
 	// wiring needed for the two existing call sites (Delete/Evict) or any
@@ -1167,9 +1319,8 @@ window.kui = (function () {
 		showConfirmModal(question, () => e.detail.issueRequest(true));
 	});
 
-	// htmx only swaps 2xx responses by default — a failed fragment request
-	// (e.g. cluster unreachable) would otherwise fail completely silently,
-	// leaving whatever pane was loading stuck. Surface it as a toast instead.
+	// A failed fragment request must leave a visible error in its target and
+	// a toast, rather than leaving the detail pane loading indefinitely.
 	document.body.addEventListener("htmx:responseError", (e) => {
 		const xhr = e.detail.xhr;
 		const msg = (xhr && xhr.responseText ? xhr.responseText : "request failed").trim().slice(0, 300);
@@ -1189,6 +1340,16 @@ window.kui = (function () {
 			target.textContent = "Search failed: " + msg;
 			target.setAttribute("role", "alert");
 		}
+		if (target && target.id === "detail-pane") {
+			const error = document.createElement("div");
+			error.className = "error-state";
+			error.setAttribute("role", "alert");
+			error.textContent = msg || "request failed";
+			target.replaceChildren(error);
+			target.classList.add("open");
+			const splitter = document.getElementById("detail-splitter");
+			if (splitter) splitter.style.display = "block";
+		}
 		showToast({ level: "error", message: msg });
 	});
 
@@ -1203,6 +1364,9 @@ window.kui = (function () {
 		const target = e.detail.target;
 		if (!target) return;
 		if (target.id === "palette-results") syncPaletteOptions();
+		if (target.id === "cluster-status") {
+			target.dataset.clusterState = /unreachable/i.test(target.textContent) ? "unreachable" : "reachable";
+		}
 
 		if (target.id === "detail-pane") {
 			const hasContent = target.innerHTML.trim() !== "";
@@ -1210,6 +1374,8 @@ window.kui = (function () {
 			const splitter = document.getElementById("detail-splitter");
 			if (splitter) splitter.style.display = hasContent ? "block" : "none";
 			syncYAMLDirtyState();
+			const terminal = target.querySelector("#term-pane[data-exec-url]");
+			if (terminal) startShell(terminal.dataset.execUrl);
 		}
 
 		if (target.id === "yaml-result" && target.textContent.toLowerCase().includes("applied")) {
@@ -1231,6 +1397,7 @@ window.kui = (function () {
 		showTab,
 		startLogs,
 		startShell,
+		openDebugShell,
 		toggleLogs,
 		clearLogs,
 		filterLogs,

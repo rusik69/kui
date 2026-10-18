@@ -12,20 +12,20 @@
     </div>
   </div>
   <div class="text-dim">{{.Kind}} &middot; {{.Namespace}} &middot; {{.Age}}</div>
-  <div class="tab-row">
-    <button type="button" class="tab-btn active" onclick="kui.showTab(this,'tab-details')">Details</button>
-    <button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-yaml')">YAML</button>
-    <button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-events')">Events</button>
-    {{if .IsPod}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-logs')">Logs</button>{{end}}
-    {{if .IsPod}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-shell')">Shell</button>{{end}}
-    {{if .IsDeployment}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-history')">History</button>{{end}}
-    {{if or .IsPod .IsService}}<button type="button" class="tab-btn" onclick="kui.showTab(this,'tab-forward')">Port-forward</button>{{end}}
+  <div class="tab-row" role="tablist" aria-label="Resource details">
+    <button type="button" id="tab-button-details" class="tab-btn active" role="tab" aria-controls="tab-details" aria-selected="true" tabindex="0" onclick="kui.showTab(this,'tab-details')">Details</button>
+    <button type="button" id="tab-button-yaml" class="tab-btn" role="tab" aria-controls="tab-yaml" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-yaml')">YAML</button>
+    <button type="button" id="tab-button-events" class="tab-btn" role="tab" aria-controls="tab-events" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-events')">Events</button>
+    {{if .IsPod}}<button type="button" id="tab-button-logs" class="tab-btn" role="tab" aria-controls="tab-logs" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-logs')">Logs</button>{{end}}
+    {{if .IsPod}}<button type="button" id="tab-button-shell" class="tab-btn" role="tab" aria-controls="tab-shell" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-shell')">Shell</button>{{end}}
+    {{if .IsDeployment}}<button type="button" id="tab-button-history" class="tab-btn" role="tab" aria-controls="tab-history" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-history')">History</button>{{end}}
+    {{if or .IsPod .IsService}}<button type="button" id="tab-button-forward" class="tab-btn" role="tab" aria-controls="tab-forward" aria-selected="false" tabindex="-1" onclick="kui.showTab(this,'tab-forward')">Port-forward</button>{{end}}
   </div>
 </div>
 
 <div class="detail-body">
 
-  <div id="tab-details" class="detail-tab-panel">
+  <div id="tab-details" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-details" tabindex="0">
     <div class="section-title">Metadata</div>
     <dl class="kv-grid">
       <dt>Name</dt><dd>{{.Name}}</dd>
@@ -99,7 +99,7 @@
     {{end}}
   </div>
 
-  <div id="tab-yaml" class="detail-tab-panel" style="display:none">
+  <div id="tab-yaml" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-yaml" tabindex="0" style="display:none" hidden>
     <form hx-put="{{.YAMLDiffURL}}" hx-target="#yaml-diff-pane" hx-swap="innerHTML">
       <input type="hidden" name="original" value="{{.YAML}}">
       <textarea id="yaml-editor" class="yaml-editor" name="yaml" spellcheck="false">{{.YAML}}</textarea>
@@ -114,7 +114,7 @@
     <div id="yaml-diff-pane"></div>
   </div>
 
-  <div id="tab-events" class="detail-tab-panel" style="display:none">
+  <div id="tab-events" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-events" tabindex="0" style="display:none" hidden>
     <table class="resource-table">
       <thead><tr><th>Type</th><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
       <tbody>
@@ -125,31 +125,31 @@
   </div>
 
   {{if .IsPod}}
-  <div id="tab-logs" class="detail-tab-panel" style="display:none">
+  <div id="tab-logs" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-logs" tabindex="0" style="display:none" hidden>
     <div class="stream-controls">
       <label>Container <select id="log-container" aria-label="Log container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
       <label>Initial lines <input id="log-tail-lines" type="number" min="1" max="5000" value="500" aria-label="Initial log lines"></label>
       <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Tail</button>
       <button id="log-pause" class="btn" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
       <button class="btn" onclick="kui.clearLogs()">Clear</button>
-      <span id="log-status" role="status" aria-live="polite">Disconnected</span>
+      <span id="log-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
     </div>
     <label class="log-filter">Filter logs <input id="log-filter" type="search" oninput="kui.filterLogs()"></label>
     <div id="logs-pane" class="log-pane" role="log" aria-live="off"></div>
   </div>
 
-  <div id="tab-shell" class="detail-tab-panel" style="display:none">
+  <div id="tab-shell" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-shell" tabindex="0" style="display:none" hidden>
     <div class="stream-controls">
       <label>Container <select id="shell-container" aria-label="Shell container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
       <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
       <button class="btn" onclick="kui.copyTerminalSelection()">Copy selection</button>
       <button class="btn" onclick="kui.clearTerminal()">Clear terminal</button>
-      <span id="shell-status" role="status" aria-live="polite">Disconnected</span>
+      <span id="shell-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
     </div>
     <div id="term-pane" class="term-pane"></div>
   </div>
 
-  <div id="tab-forward" class="detail-tab-panel" style="display:none">
+  <div id="tab-forward" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-forward" tabindex="0" style="display:none" hidden>
     <form hx-post="{{.PortForwardURL}}" hx-target="#forward-result" hx-swap="innerHTML">
       <label>Local port <input type="number" name="localPort" required></label>
       <label>Remote port <input type="number" name="remotePort" required value="{{.DefaultRemotePort}}"></label>
@@ -160,7 +160,7 @@
   {{end}}
 
   {{if .IsDeployment}}
-  <div id="tab-history" class="detail-tab-panel" style="display:none"
+  <div id="tab-history" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-history" tabindex="0" style="display:none" hidden
        hx-get="{{.HistoryURL}}" hx-trigger="revealed" hx-swap="innerHTML">
     <div class="loading-state">Loading history&hellip;</div>
   </div>

@@ -7,7 +7,9 @@ This plan follows the completed UI work in `IMPROVEMENTS_3.md`. It prioritizes o
 - [x] Use Node 24-compatible GitHub Actions versions for checkout, Go/Node setup, and artifact transfer.
 - [x] Generate an SPDX JSON SBOM and signed build-provenance/SBOM attestations for release binaries.
 - [x] Smoke-test each target binary with a fake kubeconfig and check `/healthz` and `/readyz` before publication.
-- [ ] Run the updated release workflow on all five GitHub-hosted platforms; verify all binary checksums, retrieve the SPDX asset, and verify a binary with `gh attestation verify`.
+- [x] Run the updated release workflow on all five GitHub-hosted platforms; verify all binary checksums, retrieve the SPDX asset, and verify a binary with `gh attestation verify`.
+  - `v0.5.0` workflow run `39153285713` built and smoke-tested Linux amd64/arm64, macOS amd64/arm64, and Windows amd64; the release contains five binaries, five SHA-256 manifests, and `kui.spdx.json`.
+  - A clean download verified all five checksums. The Linux amd64 binary's SLSA provenance and SPDX 2.3 attestations both passed `gh attestation verify`.
 
 ## Lifecycle reliability
 
@@ -16,7 +18,8 @@ This plan follows the completed UI work in `IMPROVEMENTS_3.md`. It prioritizes o
 - [x] Make browser detail-opening tests wait for a successful detail response before asserting the pane.
 - [x] Add an end-to-end case where a context switch happens while detail/search requests are pending; the new context remains selected after the old requests settle.
 - [x] Exercise watch disconnect/reconnect and shutdown in browser integration; launch the actual macOS WebView, verify its page load, and close the window to confirm server shutdown.
-- [x] Make Enter trigger the row's HTMX detail request directly, remove synthetic initial watch updates from the fixture, and restore focus to the selected row when details close.
+- [x] Make Enter trigger a deterministic HTMX detail request, remove synthetic initial watch updates from the fixture, and restore focus to the selected row when details close.
+  - CI runs the UI suite in Chromium and WebKit; clipboard-content checks run in Chromium because Playwright WebKit does not support granting `clipboard-write`.
 
 ## Large-cluster performance
 
@@ -46,4 +49,4 @@ The local Apple M4 Pro sample is for reference only. Hosted runner hardware may 
 - [x] Retain node-shell assertions for no service-account token, non-privileged container, and read-only host-root mount.
 - [x] Retain same-origin and CSRF checks for browser mutations.
 - [x] Add handler-level node-shell API denial coverage; verify the denied response renders no session and carries no HTMX view-change headers.
-- [ ] Verify the release SBOM and signed attestations from a clean download environment.
+- [x] Verify the release SBOM and signed attestations from a clean download environment; the retrieved SPDX 2.3 SBOM contains 314 packages.

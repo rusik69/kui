@@ -35,6 +35,7 @@ window.kui = (function () {
 	let batchFailures = [];
 	let activeSplitter = null;
 	let activeDetailPane = null;
+	let detailReturnFocus = null;
 	let splitterListenersInstalled = false;
 	let splitterWidthLoaded = false;
 	let splitterDragType = null;
@@ -665,6 +666,12 @@ window.kui = (function () {
 		if (splitter) splitter.style.display = "none";
 		setBreadcrumbName("");
 		dp.dispatchEvent(new CustomEvent("kui:detail-closed", { bubbles: true }));
+		const returnFocus = detailReturnFocus;
+		detailReturnFocus = null;
+		const focusTarget = returnFocus?.isConnected ? returnFocus :
+			returnFocus?.dataset.id && Array.from(document.querySelectorAll("#kui-table tbody tr[data-id]"))
+				.find((row) => row.dataset.id === returnFocus.dataset.id);
+		if (focusTarget) focusTarget.focus();
 	}
 
 	function closeDetail() {
@@ -1187,7 +1194,7 @@ window.kui = (function () {
 			const row = e.target.closest("#kui-table tbody tr[data-id]");
 			if (row && !e.target.closest("input,button,a,select,textarea")) {
 				e.preventDefault();
-				row.click();
+				selectTableRow(row);
 				return;
 			}
 		}
@@ -1198,27 +1205,29 @@ window.kui = (function () {
 		sortTableColumn(th);
 	}
 
+	function selectTableRow(row) {
+		detailReturnFocus = row;
+		const lp = row.closest(".list-pane");
+		if (lp) {
+			lp.querySelectorAll("tr.selected").forEach((selected) => {
+				selected.classList.remove("selected");
+				selected.setAttribute("aria-selected", "false");
+			});
+			row.classList.add("selected");
+			row.setAttribute("aria-selected", "true");
+			lp.dataset.selectedRow = row.dataset.id;
+		}
+		if (row.dataset.name) setBreadcrumbName(row.dataset.name);
+	}
+
 	function onTableClick(e) {
 		const th = e.target.closest("#kui-table thead th");
 		if (th) {
 			sortTableColumn(th);
 			return;
 		}
-
-		const tr = e.target.closest("#kui-table tbody tr[data-id]");
-		if (tr) {
-			const lp = tr.closest(".list-pane");
-			if (lp) {
-				lp.querySelectorAll("tr.selected").forEach((row) => {
-					row.classList.remove("selected");
-					row.setAttribute("aria-selected", "false");
-				});
-				tr.classList.add("selected");
-				tr.setAttribute("aria-selected", "true");
-				lp.dataset.selectedRow = tr.dataset.id;
-			}
-			if (tr.dataset.name) setBreadcrumbName(tr.dataset.name);
-		}
+		const row = e.target.closest("#kui-table tbody tr[data-id]");
+		if (row) selectTableRow(row);
 	}
 
 	// ---- bulk select / delete (Phase 7) ----

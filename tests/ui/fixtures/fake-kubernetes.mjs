@@ -307,8 +307,7 @@ export async function startFakeKubernetes() {
       const closeImmediately = controls.closeNextWatch;
       controls.closeNextWatch = false;
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
-      const item = (objects[resource] || []).find((candidate) => !namespace || candidate.metadata.namespace === namespace);
-      if (item) response.write(`${JSON.stringify({ type: "ADDED", object: item })}\n`);
+      // The watch starts at the list resourceVersion; replaying existing objects here creates an impossible initial update.
       let active = true;
       response.on("close", () => {
         if (active) {

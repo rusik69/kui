@@ -218,7 +218,11 @@ test("log tail presets, filtering, copying, and downloads preserve consumer-visi
   await expect(page.locator("#log-tail-preset")).toHaveValue("");
   await page.locator("#logs-regex").check();
   await page.locator("#log-filter").fill("^second deterministic");
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: app.url });
+  // Playwright WebKit cannot grant clipboard permissions; Chromium asserts the copied payloads.
+  const canReadClipboard = page.context().browser()?.browserType().name() !== "webkit";
+  if (canReadClipboard) {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: app.url });
+  }
   await page.getByRole("button", { name: "Connect logs" }).click();
   const logs = page.locator("#logs-pane");
   await expect(logs).toContainText("second deterministic log line");
@@ -228,9 +232,11 @@ test("log tail presets, filtering, copying, and downloads preserve consumer-visi
     tailLines: "37",
   });
 
-  await page.getByRole("button", { name: "Copy filtered" }).click();
-  await expect(page.locator("#toast-container")).toContainText("Copied to clipboard");
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("second deterministic log line");
+  if (canReadClipboard) {
+    await page.getByRole("button", { name: "Copy filtered" }).click();
+    await expect(page.locator("#toast-container")).toContainText("Copied to clipboard");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("second deterministic log line");
+  }
 
   const rawPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download raw" }).click();
@@ -535,14 +541,17 @@ test("resource comparisons filter changes, export, copy, and preserve table sele
   await expect.poll(() => rows.count()).toBeLessThan(allRows);
   await changedOnly.uncheck();
 
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
-  await panel.locator('[data-action="comparison-copy-text"]').click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("alpha vs bravo");
-  await panel.locator('[data-action="comparison-copy-json"]').click();
-  const exportedJSON = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
-  expect(exportedJSON.resources.map((item) => item.name).sort()).toEqual(["alpha", "bravo"]);
-  expect(JSON.stringify(exportedJSON.differences)).toContain("frontend");
-  expect(JSON.stringify(exportedJSON.differences)).toContain("backend");
+  // Clipboard payloads are covered in Chromium; WebKit's clipboard API exposes no grantable permissions.
+  if (page.context().browser()?.browserType().name() !== "webkit") {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    await panel.locator('[data-action="comparison-copy-text"]').click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("alpha vs bravo");
+    await panel.locator('[data-action="comparison-copy-json"]').click();
+    const exportedJSON = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+    expect(exportedJSON.resources.map((item) => item.name).sort()).toEqual(["alpha", "bravo"]);
+    expect(JSON.stringify(exportedJSON.differences)).toContain("frontend");
+    expect(JSON.stringify(exportedJSON.differences)).toContain("backend");
+  }
 
   const csvPromise = page.waitForEvent("download");
   await panel.locator('[data-action="comparison-export-csv"]').click();

@@ -106,3 +106,73 @@ users:
 		})
 	}
 }
+
+func TestYAMLApplyUpdatesResourceAndRendersSuccess(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api", "/apis":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"kind":"APIVersions","versions":["v1"],"apiVersion":"v1"}`)
+		case "/api/v1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"kind":"APIResourceList","apiVersion":"v1","groupVersion":"v1","resources":[{"name":"pods","singularName":"pod","namespaced":true,"kind":"Pod","verbs":["get","list","update"]}]}`)
+		default:
+			gotMethod, gotPath = r.Method, r.URL.Path
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read API request: %v", err)
+			}
+			gotBody = string(body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"demo","namespace":"default"}}`)
+		}
+	}))
+	defer apiServer.Close()
+
+	kubeconfig := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: %q
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+current-context: test
+users:
+- name: test
+  user: {}
+`, apiServer.URL)
+	kubeconfigPath := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mgr = k8s.NewManager(kubeconfigPath)
+
+	form := url.Values{"yaml": {"apiVersion: v1\nkind: Pod\nmetadata:\n  name: demo\n  namespace: default\n"}}
+	req := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("ctx", encodeCtx("test"))
+	req.SetPathValue("ns", "default")
+	req.SetPathValue("resource", "pods")
+	req.SetPathValue("name", "demo")
+	recorder := httptest.NewRecorder()
+	server.handleYAMLApply(recorder, req)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "applied") {
+		t.Fatalf("response = %d %q, want successful apply", recorder.Code, recorder.Body.String())
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/v1/namespaces/default/pods/demo" {
+		t.Errorf("API request = %s %s, want PUT /api/v1/namespaces/default/pods/demo", gotMethod, gotPath)
+	}
+	if !strings.Contains(gotBody, `"name":"demo"`) {
+		t.Errorf("update body omitted resource identity: %s", gotBody)
+	}
+}

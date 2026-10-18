@@ -298,6 +298,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /c/{ctx}/status", s.handleStatus)
 	s.mux.HandleFunc("GET /c/{ctx}/counts", s.handleCounts)
 	s.mux.HandleFunc("GET /c/{ctx}/search", s.handleSearch)
+	s.mux.HandleFunc("POST /c/{ctx}/bulk-metadata", s.protectMutation(s.handleBulkMetadata))
+	s.mux.HandleFunc("POST /c/{ctx}/bulk-yaml", s.protectMutation(s.handleBulkYAMLExport))
+	s.mux.HandleFunc("POST /c/{ctx}/{ns}/deployments/{name}/scale", s.protectMutation(s.handleDeploymentScale))
+	s.mux.HandleFunc("POST /c/{ctx}/{ns}/deployments/{name}/action", s.protectMutation(s.handleDeploymentAction))
+	s.mux.HandleFunc("GET /c/{ctx}/{ns}/deployments/{name}/status", s.handleDeploymentStatus)
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/deployments/{name}/history", s.handleDeploymentHistory)
 }
 

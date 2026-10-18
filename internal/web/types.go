@@ -1,6 +1,10 @@
 package web
 
-import "github.com/rusik69/kui/internal/k8s"
+import (
+	"time"
+
+	"github.com/rusik69/kui/internal/k8s"
+)
 
 // ContextOption is one entry in the context switcher: ID is the
 // base64url-encoded value used in URLs, Name is the real kubeconfig context
@@ -141,18 +145,31 @@ type DebugShellData struct {
 
 // AttentionItem is one unhealthy pod shown in Overview's "Needs attention" list.
 type AttentionItem struct {
-	Name, Namespace, Reason, Detail string
+	Name, Namespace, Reason, Detail, Severity string
+}
+
+// EventGroup summarizes recent Kubernetes events by type and reason.
+type EventGroup struct {
+	Type, Reason string
+	Count        int
+	LatestAge    string
+	URL          string
 }
 
 // OverviewData backs the "overview" fragment: cluster-wide summary tiles.
 type OverviewData struct {
-	Context, Namespace                string
-	NodeCount, NodeReadyCount         int
-	NamespaceCount                    int
-	PodRunning, PodPending, PodFailed int
-	WarningCount                      int
-	RecentWarnings                    []Event
-
+	Context, Namespace                     string
+	UpdatedAt                              time.Time
+	Error                                  string
+	EventsAvailable                        bool
+	EventsError                            string
+	EventGroups                            []EventGroup
+	MoreEventGroups                        int
+	NodeCount, NodeReadyCount              int
+	NamespaceCount                         int
+	PodRunning, PodPending, PodFailed      int
+	WarningCount                           int
+	RecentWarnings                         []Event
 	CPURequestedMilli, CPUAllocatableMilli int64
 	MemRequestedBytes, MemAllocatableBytes int64
 	PodsUsed, PodsAllocatable              int64

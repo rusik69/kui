@@ -22,15 +22,17 @@ window.kui = (function () {
 	let logAttempt = false;
 	let logBase = "";
 	let logPaused = false;
-	let logBuffer = "";
+	let logRetryTimer = null;
+	let logRetryAttempt = 0;
 	let logTrimmed = false;
-	let logFailed = false;
+	let logFilterInvalid = false;
 	let terminalSession = null;
 	let shellAttempt = false;
 	let shellBase = "";
 	let watchFailed = false;
 	let secretTimers = new WeakMap();
 	let selectedNames = new Map();
+	let batchFailures = [];
 	let activeSplitter = null;
 	let activeDetailPane = null;
 	let splitterListenersInstalled = false;
@@ -47,7 +49,34 @@ window.kui = (function () {
 		if (status) status.textContent = text;
 	}
 
+	function scheduleLogReconnect() {
+		if (logRetryTimer !== null || !logBase) return;
+		logRetryAttempt += 1;
+		const delay = Math.min(30000, 1000 * Math.pow(2, logRetryAttempt - 1));
+		const cancel = document.getElementById("log-retry-cancel");
+		if (cancel) cancel.hidden = false;
+		setStreamStatus("log-status", "Reconnect attempt " + logRetryAttempt + " in " + (delay / 1000) + "s");
+		logRetryTimer = window.setTimeout(() => {
+			logRetryTimer = null;
+			if (cancel) cancel.hidden = true;
+			startLogs(logBase);
+		}, delay);
+	}
+
+	function cancelLogReconnect() {
+		clearTimeout(logRetryTimer);
+		logRetryTimer = null;
+		logRetryAttempt = 0;
+		const cancel = document.getElementById("log-retry-cancel");
+		if (cancel) cancel.hidden = true;
+		setStreamStatus("log-status", "Reconnect canceled");
+	}
+
 	function closeLogStream() {
+		clearTimeout(logRetryTimer);
+		logRetryTimer = null;
+		const retryCancel = document.getElementById("log-retry-cancel");
+		if (retryCancel) retryCancel.hidden = true;
 		if (logSocket) {
 			logSocket.onopen = null;
 			logSocket.onmessage = null;
@@ -68,24 +97,40 @@ window.kui = (function () {
 		}
 	}
 
+	function filteredLogText() {
+		const input = document.getElementById("log-filter");
+		const filter = input?.value || "";
+		if (!filter) { logFilterInvalid = false; return logBuffer; }
+		const sensitive = !!document.getElementById("log-case-sensitive")?.checked;
+		const regex = !!document.getElementById("logs-regex")?.checked;
+		if (regex) {
+			try {
+				const expression = new RegExp(filter, sensitive ? "" : "i");
+				logFilterInvalid = false;
+				return logBuffer.split("\n").filter((line) => expression.test(line)).join("\n");
+			} catch {
+				logFilterInvalid = true;
+				return "";
+			}
+		}
+		logFilterInvalid = false;
+		const query = sensitive ? filter : filter.toLowerCase();
+		return logBuffer.split("\n").filter((line) =>
+			(sensitive ? line : line.toLowerCase()).includes(query)).join("\n");
+	}
+
 	function renderLogBuffer() {
 		const pane = document.getElementById("logs-pane");
 		if (!pane) return;
 		const previousTop = pane.scrollTop;
-		const filterInput = document.getElementById("log-filter");
-		const filter = filterInput ? filterInput.value : "";
-		const caseSensitive = !!document.getElementById("log-case-sensitive")?.checked;
+		pane.textContent = filteredLogText();
+		pane.style.whiteSpace = document.getElementById("logs-wrap")?.checked ? "pre-wrap" : "pre";
+		if (document.getElementById("log-follow")?.checked && !logPaused) pane.scrollTop = pane.scrollHeight;
+		else pane.scrollTop = previousTop;
 		const lines = logBuffer.split("\n");
-		const query = caseSensitive ? filter : filter.toLowerCase();
-		pane.textContent = filter ? lines.filter((line) =>
-			(caseSensitive ? line : line.toLowerCase()).includes(query)).join("\n") : logBuffer;
-		if (document.getElementById("log-follow")?.checked && !logPaused) {
-			pane.scrollTop = pane.scrollHeight;
-		} else {
-			pane.scrollTop = previousTop;
-		}
 		const status = document.getElementById("log-buffer-status");
-		if (status) status.textContent = lines.filter((line, index) => line || index < lines.length - 1).length +
+		if (status) status.textContent = logFilterInvalid ? "Invalid regular expression" :
+			lines.filter((line, index) => line || index < lines.length - 1).length +
 			" buffered lines" + (logTrimmed ? " · older lines trimmed" : "");
 	}
 
@@ -109,6 +154,14 @@ window.kui = (function () {
 			}
 			const count = Number.parseInt(saved.tail, 10);
 			if (Number.isInteger(count) && count >= 1 && count <= maxLogLines) tail.value = String(count);
+			const preset = document.getElementById("log-tail-preset");
+			if (preset && Array.from(preset.options).some((option) => option.value === String(count))) preset.value = String(count);
+			["logs-previous", "logs-timestamps", "logs-wrap"].forEach((id) => {
+				const el = document.getElementById(id);
+				if (el && typeof saved[id] === "boolean") el.checked = saved[id];
+			});
+			const since = document.getElementById("logs-since");
+			if (since && Array.from(since.options).some((option) => option.value === saved.since)) since.value = saved.since;
 		} catch { /* Storage is optional. */ }
 	}
 
@@ -117,6 +170,10 @@ window.kui = (function () {
 			localStorage.setItem(logSettingsKey(), JSON.stringify({
 				container: document.getElementById("log-container")?.value || "",
 				tail: document.getElementById("log-tail-lines")?.value || "500",
+				"logs-previous": !!document.getElementById("logs-previous")?.checked,
+				"logs-timestamps": !!document.getElementById("logs-timestamps")?.checked,
+				"logs-wrap": !!document.getElementById("logs-wrap")?.checked,
+				since: document.getElementById("logs-since")?.value || "",
 			}));
 		} catch { /* Storage is optional. */ }
 	}
@@ -141,6 +198,14 @@ window.kui = (function () {
 		if (tailInput) tailInput.value = String(tailLines);
 		if (container) params.set("container", container);
 		params.set("tailLines", String(tailLines));
+		const previous = !!document.getElementById("logs-previous")?.checked;
+		const timestamps = !!document.getElementById("logs-timestamps")?.checked;
+		const since = document.getElementById("logs-since")?.value || "";
+		if (previous) params.set("previous", "true");
+		if (timestamps) params.set("timestamps", "true");
+		if (since) params.set("since", since);
+		const mode = document.getElementById("log-mode");
+		if (mode) mode.textContent = (previous ? "Previous instance" : "Current instance") + (timestamps ? " · timestamps" : "") + (since ? " · last " + (since / 3600) + "h" : "");
 		persistLogSettings();
 		logAttempt = true;
 		const ws = new WebSocket(wsURL(base + "?" + params.toString()));
@@ -155,6 +220,7 @@ window.kui = (function () {
 			if (pause) pause.disabled = false;
 			const reconnect = document.getElementById("log-reconnect");
 			if (reconnect) reconnect.disabled = true;
+			logRetryAttempt = 0;
 			setStreamStatus("log-status", "Connected · " + (container || "default container"));
 		};
 		ws.onmessage = (ev) => {
@@ -183,6 +249,7 @@ window.kui = (function () {
 			const pause = document.getElementById("log-pause");
 			if (pause) pause.disabled = true;
 			setStreamStatus("log-status", "Connection error — reconnect available");
+			scheduleLogReconnect();
 		};
 		ws.onclose = () => {
 			if (logSocket === ws) {
@@ -191,26 +258,32 @@ window.kui = (function () {
 				const reconnect = document.getElementById("log-reconnect");
 				if (reconnect) reconnect.disabled = false;
 				setStreamStatus("log-status", logFailed ? "Connection error — reconnect available" : "Disconnected — reconnect available");
+				scheduleLogReconnect();
 				if (pause) pause.disabled = true;
 			}
 		};
 	}
 
-	function downloadLogs() {
+	function downloadLogs(filtered = false) {
 		const pod = document.querySelector("#detail-pane .detail-header strong")?.textContent || "pod";
 		const container = document.getElementById("log-container")?.value || "default";
 		const safe = (value) => value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^[-_.]+|[-_.]+$/g, "") || "unknown";
-		const blob = new Blob([logBuffer], { type: "text/plain;charset=utf-8" });
+		const content = filtered ? filteredLogText() : logBuffer;
+		const mode = filtered ? "filtered" : "raw";
+		const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
 		const url = URL.createObjectURL(blob);
 		const link = document.createElement("a");
 		link.href = url;
-		link.download = safe(pod) + "-" + safe(container) + (logTrimmed ? "-partial" : "") + ".log";
+		link.download = safe(pod) + "-" + safe(container) + "-" + mode + (logTrimmed ? "-partial" : "") + ".log";
 		link.hidden = true;
 		document.body.appendChild(link);
 		link.click();
 		link.remove();
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	}
+
+	function copyFilteredLogs() { copyText(filteredLogText()); }
+	function downloadFilteredLogs() { downloadLogs(true); }
 
 	function jumpToLatest() {
 		const pane = document.getElementById("logs-pane");
@@ -585,9 +658,13 @@ window.kui = (function () {
 		shellBase = "";
 		relatedNodeHTML = "";
 		relatedNodeRowID = "";
+		dp.replaceChildren();
+		dp.classList.remove("open");
+		dp.removeAttribute("aria-busy");
 		const splitter = document.getElementById("detail-splitter");
 		if (splitter) splitter.style.display = "none";
 		setBreadcrumbName("");
+		dp.dispatchEvent(new CustomEvent("kui:detail-closed", { bubbles: true }));
 	}
 
 	function closeDetail() {
@@ -700,6 +777,50 @@ window.kui = (function () {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	}
 
+	async function downloadSelectedYAMLBundle() {
+		const button = document.getElementById("bulk-yaml-export");
+		const paths = Array.from(selectedNames.keys()).sort();
+		if (!paths.length) return;
+		const originalText = button?.textContent || "Download selected YAML";
+		if (button) {
+			button.disabled = true;
+			button.setAttribute("aria-busy", "true");
+			button.textContent = "Preparing YAML…";
+		}
+		try {
+			const csrfToken = document.querySelector('meta[name="kui-csrf-token"]')?.content;
+			if (!csrfToken) throw new Error("CSRF token is unavailable.");
+			const context = document.body?.dataset.ctx;
+			if (!context) throw new Error("The active context is unavailable.");
+			const response = await fetch("/c/" + encodeURIComponent(context) + "/bulk-yaml", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "X-Kui-CSRF": csrfToken },
+				body: JSON.stringify({ paths }),
+			});
+			if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+			const blob = await response.blob();
+			if (!blob.size) throw new Error("The server returned an empty YAML bundle.");
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = "kui-selected-resources.yaml";
+			link.hidden = true;
+			document.body.appendChild(link);
+			link.click();
+			link.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+			showToast({ level: "success", message: `Downloaded ${paths.length} selected resource${paths.length === 1 ? "" : "s"} as YAML.` });
+		} catch (error) {
+			showToast({ level: "error", message: `YAML export failed: ${error.message}` });
+		} finally {
+			if (button) {
+				button.disabled = false;
+				button.removeAttribute("aria-busy");
+				button.textContent = originalText;
+			}
+		}
+	}
+
 	// ---- breadcrumb (Phase 4) ----
 
 	function setBreadcrumbName(name) {
@@ -752,7 +873,7 @@ window.kui = (function () {
 	// directly with no onclick of their own).
 	function syncActiveResourceFromPath(path) {
 		if (!path) return;
-		const parts = path.split("/");
+		const parts = new URL(path, location.origin).pathname.split("/");
 		// ["", "c", ctxId, ns, resource]
 		if (parts[1] !== "c" || parts.length < 5) return;
 		const resource = parts[4];
@@ -1062,7 +1183,7 @@ window.kui = (function () {
 			e.preventDefault();
 			return;
 		}
-		if (e.key === "Enter" || e.key === " ") {
+		if (e.key === "Enter") {
 			const row = e.target.closest("#kui-table tbody tr[data-id]");
 			if (row && !e.target.closest("input,button,a,select,textarea")) {
 				e.preventDefault();
@@ -1112,6 +1233,25 @@ window.kui = (function () {
 			bar.style.display = "flex";
 			const count = document.getElementById("bulk-count");
 			if (count) count.textContent = checked.length + " selected across pages · " + visibleSelected + " of " + visible.length + " visible selected";
+			if (!document.getElementById("batch-metadata-button")) {
+				const button = document.createElement("button");
+				button.type = "button";
+				button.className = "btn";
+				button.id = "batch-metadata-button";
+				button.textContent = "Edit labels / annotations";
+				button.addEventListener("click", showBatchMetadataForm);
+				bar.appendChild(button);
+			}
+			if (!document.getElementById("batch-metadata-form")) createBatchMetadataForm(bar);
+			if (batchFailures.length && !document.getElementById("batch-metadata-retry")) {
+				const retry = document.createElement("button");
+				retry.type = "button";
+				retry.id = "batch-metadata-retry";
+				retry.className = "btn";
+				retry.textContent = "Retry failed metadata updates";
+				retry.addEventListener("click", retryBatchMetadata);
+				bar.appendChild(retry);
+			}
 		} else bar.style.display = "none";
 	}
 
@@ -1143,8 +1283,17 @@ window.kui = (function () {
 			setSelectedRows(lp, selected);
 			return;
 		}
+		if (e.target.id === "log-tail-preset") {
+			const tail = document.getElementById("log-tail-lines");
+			if (tail && e.target.value) tail.value = e.target.value;
+		}
 		if (e.target.id === "column-filter") filterColumn();
-		if (e.target.id === "log-container" || e.target.id === "log-tail-lines") persistLogSettings();
+		if (e.target.id === "log-tail-lines") document.getElementById("log-tail-preset").value = "";
+		if (e.target.id === "log-container" || e.target.id === "log-tail-lines" || e.target.id === "log-tail-preset" ||
+			["logs-previous", "logs-timestamps", "logs-since", "logs-wrap"].includes(e.target.id)) {
+			persistLogSettings();
+			if (e.target.id === "logs-wrap") renderLogBuffer();
+		}
 	}
 
 	function clearSelection() {
@@ -1162,6 +1311,128 @@ window.kui = (function () {
 		if (!confirm("Delete " + ids.length + " selected resources?")) return;
 		htmx.ajax("POST", lp.dataset.bulkDeleteUrl, { values: { path: ids } });
 		clearSelection();
+	}
+
+	let batchPending = null;
+	let batchPreviewFailures = [];
+	function createBatchMetadataForm(bar) {
+		const form = document.createElement("form");
+		form.id = "batch-metadata-form";
+		form.hidden = true;
+		const select = (id, labelText, options) => {
+			const label = document.createElement("label");
+			label.textContent = labelText + " ";
+			const el = document.createElement("select");
+			el.id = id;
+			options.forEach(([value, text]) => { const option = document.createElement("option"); option.value = value; option.textContent = text; el.appendChild(option); });
+			label.appendChild(el); form.appendChild(label);
+		};
+		const text = (id, labelText) => {
+			const label = document.createElement("label"); label.textContent = labelText + " ";
+			const el = id === "batch-metadata-value" ? document.createElement("textarea") : document.createElement("input");
+			el.id = id; if (el.tagName === "INPUT") el.type = "text"; label.appendChild(el); form.appendChild(label);
+		};
+		select("batch-metadata-kind", "Metadata", [["labels", "Label"], ["annotations", "Annotation"]]);
+		select("batch-metadata-action", "Action", [["add", "Add"], ["update", "Update"], ["remove", "Remove"]]);
+		text("batch-metadata-key", "Key"); text("batch-metadata-value", "Value");
+		const preview = document.createElement("button"); preview.type = "submit"; preview.className = "btn"; preview.textContent = "Preview exact patches"; form.appendChild(preview);
+		const submit = document.createElement("button"); submit.type = "button"; submit.id = "batch-metadata-submit"; submit.className = "btn btn-primary"; submit.textContent = "Confirm and apply"; submit.hidden = true; submit.addEventListener("click", submitBatchMetadata); form.appendChild(submit);
+		const output = document.createElement("pre"); output.id = "batch-metadata-results"; output.setAttribute("aria-live", "polite"); form.appendChild(output);
+		form.addEventListener("submit", previewBatchMetadata);
+		bar.appendChild(form);
+	}
+
+	function showBatchMetadataForm() {
+		const form = document.getElementById("batch-metadata-form");
+		if (!form) return;
+		form.hidden = !form.hidden;
+		if (!form.hidden) document.getElementById("batch-metadata-key")?.focus();
+	}
+
+	function batchMetadataURL() {
+		const context = location.pathname.split("/")[2];
+		return "/c/" + encodeURIComponent(context || "") + "/bulk-metadata";
+	}
+
+	function batchMetadataPayload(paths, preview) {
+		return {paths, kind: document.getElementById("batch-metadata-kind").value,
+			action: document.getElementById("batch-metadata-action").value,
+			key: document.getElementById("batch-metadata-key").value,
+			value: document.getElementById("batch-metadata-value").value, preview};
+	}
+
+	async function sendBatchMetadata(payload) {
+		const token = document.querySelector('meta[name="kui-csrf-token"]')?.content || "";
+		const response = await fetch(batchMetadataURL(), {method: "POST", credentials: "same-origin",
+			headers: {"Content-Type": "application/json", "X-Kui-CSRF": token}, body: JSON.stringify(payload)});
+		const data = await response.json().catch(() => ({}));
+		if (!response.ok) throw new Error(data.error || "Metadata request failed (" + response.status + ")");
+		return data;
+	}
+
+	async function previewBatchMetadata(event) {
+		event.preventDefault();
+		const paths = Array.from(selectedNames.keys());
+		if (!paths.length) return;
+		const payload = batchMetadataPayload(paths, true);
+		const output = document.getElementById("batch-metadata-results");
+		const submit = document.getElementById("batch-metadata-submit");
+		if (output) output.textContent = "Preparing exact per-resource patches…";
+		try {
+			const result = await sendBatchMetadata(payload);
+			const outcomes = result.outcomes || [];
+			const ready = outcomes.filter((item) => item.success);
+			batchPreviewFailures = outcomes.filter((item) => !item.success);
+			batchPending = {...payload, paths: ready.map((item) => item.path), preview: false};
+			if (output) output.textContent = outcomes.map((item) =>
+				(item.success ? "READY " : "FAILED ") + item.name + " (" + item.path + "): " +
+				(item.patch ? JSON.stringify(item.patch) : item.error)).join("\n");
+			if (submit) submit.hidden = !ready.length;
+		} catch (error) {
+			if (output) output.textContent = error.message;
+			if (submit) submit.hidden = true;
+		}
+	}
+
+	async function submitBatchMetadata() {
+		if (!batchPending) return;
+		const names = batchPending.paths.map((path) => selectedNames.get(path) || path);
+		if (!confirm("Apply " + batchPending.action + " " + batchPending.kind + " " + batchPending.key +
+			" to " + names.length + " selected resources?\n\n" + names.join("\n"))) return;
+		try {
+			const result = await sendBatchMetadata(batchPending);
+			const outcomes = [...batchPreviewFailures, ...(result.outcomes || [])];
+			batchFailures = (result.outcomes || []).filter((item) => !item.success).map((item) => item.path);
+			renderBatchMetadataOutcomes(outcomes);
+			const listPane = document.querySelector(".list-pane");
+			if (listPane) updateBulkBar(listPane);
+			const retry = document.getElementById("batch-metadata-retry");
+			if (retry) retry.hidden = !batchFailures.length;
+		} catch (error) {
+			const output = document.getElementById("batch-metadata-results");
+			if (output) output.textContent = "Request failed; no full success reported. " + error.message;
+		}
+	}
+
+	function renderBatchMetadataOutcomes(outcomes) {
+		const output = document.getElementById("batch-metadata-results");
+		if (output) output.textContent = outcomes.map((item) =>
+			(item.success ? "SUCCESS " : "FAILED ") + item.name + ": " + (item.error || "updated")).join("\n");
+	}
+
+	async function retryBatchMetadata() {
+		if (!batchPending || !batchFailures.length) return;
+		const retryPaths = batchFailures.slice();
+		try {
+			const result = await sendBatchMetadata({...batchPending, paths: retryPaths, preview: false});
+			batchFailures = (result.outcomes || []).filter((item) => !item.success).map((item) => item.path);
+			renderBatchMetadataOutcomes(result.outcomes || []);
+			const button = document.getElementById("batch-metadata-retry");
+			if (button) button.hidden = !batchFailures.length;
+		} catch (error) {
+			const output = document.getElementById("batch-metadata-results");
+			if (output) output.textContent = "Retry failed; prior successes were not replayed. " + error.message;
+		}
 	}
 
 	// ---- per-row metrics patching (Phase 6) ----
@@ -1220,6 +1491,7 @@ window.kui = (function () {
 	function syncPaletteOptions() {
 		const items = Array.from(document.querySelectorAll("#palette-results .palette-result"));
 		const input = document.getElementById("palette-input");
+		if (items.length && !items.some((item) => item.classList.contains("active"))) items[0].classList.add("active");
 		let active = null;
 		items.forEach((item, index) => {
 			item.id = "palette-option-" + index;
@@ -1605,6 +1877,88 @@ window.kui = (function () {
 		if (!logAttempt && logBase) startLogs(logBase);
 	}
 
+	let workloadStatusTimer = null;
+	async function requestWorkload(url, body) {
+		const status = document.getElementById("deployment-operation-status");
+		const token = document.querySelector('meta[name="kui-csrf-token"]')?.content || "";
+		try {
+			const response = await fetch(url, {method: "POST", credentials: "same-origin",
+				headers: {"Content-Type": "application/json", "X-Kui-CSRF": token}, body: JSON.stringify(body)});
+			const text = await response.text();
+			if (!response.ok) throw new Error(text || "Operation failed (" + response.status + ")");
+			if (status) status.textContent = "Operation accepted.";
+			refreshDeploymentStatus();
+		} catch (error) {
+			if (status) status.textContent = "Operation failed: " + error.message;
+		}
+	}
+
+	async function refreshDeploymentStatus() {
+		const pane = document.querySelector(".deployment-workbench");
+		if (!pane) return;
+		try {
+			const response = await fetch(pane.dataset.statusUrl, {credentials: "same-origin"});
+			if (!response.ok) throw new Error("Deployment status unavailable (" + response.status + ")");
+			const state = await response.json();
+			const summary = document.getElementById("deployment-replicas-status");
+			if (summary) summary.textContent = "Desired " + state.desired + " · Current " + state.current + " · Updated " + state.updated + " · Available " + state.available + (state.paused ? " · Paused" : "");
+			const desired = document.getElementById("deployment-replicas");
+			if (desired && document.activeElement !== desired) desired.value = state.desired;
+			const conditions = document.getElementById("deployment-conditions");
+			if (conditions) conditions.textContent = (state.conditions || []).map((item) =>
+				item.type + ": " + item.status + (item.reason ? " (" + item.reason + ")" : "") + (item.message ? " — " + item.message : "")).join("\n");
+			const revisionSelect = document.getElementById("deployment-revision");
+			if (revisionSelect) {
+				const selected = revisionSelect.value;
+				revisionSelect.replaceChildren(new Option("Choose an available revision", ""));
+				(state.revisions || []).forEach((revision) => revisionSelect.add(new Option("Revision " + revision, String(revision))));
+				if (Array.from(revisionSelect.options).some((option) => option.value === selected)) revisionSelect.value = selected;
+			}
+			if (state.historyError && conditions) conditions.textContent += "\nRollback history unavailable: " + state.historyError;
+		} catch (error) {
+			const status = document.getElementById("deployment-operation-status");
+			if (status && !status.textContent.startsWith("Operation failed:")) status.textContent = error.message;
+		}
+	}
+
+	function setupDeploymentWorkbench() {
+		clearInterval(workloadStatusTimer);
+		workloadStatusTimer = null;
+		if (!document.querySelector(".deployment-workbench")) return;
+		refreshDeploymentStatus();
+		workloadStatusTimer = window.setInterval(refreshDeploymentStatus, 5000);
+	}
+
+	document.addEventListener("click", (event) => {
+		const button = event.target.closest("[data-workload-action]");
+		if (!button) return;
+		const pane = button.closest(".deployment-workbench");
+		if (!pane) return;
+		const action = button.dataset.workloadAction;
+		const body = {action};
+		if (action === "rollback") {
+			const revision = Number(document.getElementById("deployment-revision")?.value);
+			if (!Number.isInteger(revision) || revision < 1) {
+				document.getElementById("deployment-operation-status").textContent = "Choose a positive available revision.";
+				return;
+			}
+			body.revision = revision;
+		}
+		if ((action === "pause" || action === "rollback") && !confirm(action === "pause" ? "Pause this Deployment rollout?" : "Roll back to revision " + body.revision + "?")) return;
+		requestWorkload(pane.dataset.actionUrl, body);
+	});
+	document.addEventListener("submit", (event) => {
+		if (event.target.id !== "deployment-scale-form") return;
+		event.preventDefault();
+		const pane = event.target.closest(".deployment-workbench");
+		const value = document.getElementById("deployment-replicas").value;
+		if (!/^(0|[1-9][0-9]*)$/.test(value) || Number(value) > 100000) {
+			document.getElementById("deployment-operation-status").textContent = "Replicas must be an integer from 0 to 100000.";
+			return;
+		}
+		requestWorkload(pane.dataset.scaleUrl, {replicas: Number(value)});
+	});
+
 	function samePort(checkbox) {
 		const form = checkbox.closest("form");
 		const local = form?.querySelector('[name="localPort"]');
@@ -1693,6 +2047,7 @@ window.kui = (function () {
 		}
 		const shell = pane.querySelector("#shell-container");
 		if (shell && shell.selectedIndex < 0 && shell.options.length) shell.selectedIndex = 0;
+		setupDeploymentWorkbench();
 		if (relatedNodeHTML) {
 			const back = document.createElement("button");
 			back.type = "button";
@@ -1755,6 +2110,7 @@ window.kui = (function () {
 			}
 			return;
 		}
+		if (e.target.closest("dialog[open]")) return;
 		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
 			e.preventDefault();
 			openPalette();
@@ -1944,8 +2300,11 @@ window.kui = (function () {
 		copyTerminalSelection,
 		clearTerminal,
 		reconnectLogs,
+		cancelLogReconnect,
 		reconnectShell,
 		downloadLogs,
+		copyFilteredLogs,
+		downloadFilteredLogs,
 		jumpToLatest,
 		toggleFollow,
 		searchDetail,
@@ -1980,5 +2339,6 @@ window.kui = (function () {
 		setRowDensity,
 		copyText,
 		downloadYAML,
+		downloadSelectedYAMLBundle,
 	};
 })();

@@ -1,0 +1,103 @@
+/* Shared control, loading, and responsive states for the table, details, and dialogs. */
+button, input, select, textarea { font: inherit; }
+button, .btn, .icon-btn, select, input:not([type="checkbox"]), textarea { transition: border-color .14s ease, background-color .14s ease, color .14s ease, box-shadow .14s ease; }
+button, .btn { min-height: 32px; }
+.btn { padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-hover); color: var(--text); cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); background: color-mix(in srgb, var(--accent) 14%, var(--bg-hover)); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:disabled, button:disabled { opacity: .52; cursor: not-allowed; }
+.btn-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-dim); color: #fff; }
+.btn-danger, [data-danger="true"], .danger-action { border-color: var(--red) !important; background: color-mix(in srgb, var(--red) 16%, var(--bg-raised)) !important; color: var(--error) !important; }
+.btn-danger:hover:not(:disabled), [data-danger="true"]:hover:not(:disabled), .danger-action:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 25%, var(--bg-raised)) !important; }
+.icon-btn { min-width: 30px; min-height: 30px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text); cursor: pointer; }
+.icon-btn:hover:not(:disabled) { border-color: var(--border); background: var(--bg-hover); }
+
+.loading-skeleton-row .skeleton-line { width: 72%; max-width: none; height: 11px; margin: 1px 0; }
+#list-pane[aria-busy="true"] .resource-table tbody tr:not(.loading-skeleton-row) { opacity: .42; }
+#detail-pane[aria-busy="true"]::before {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	z-index: 11;
+	margin: 0;
+	padding: 4px 8px;
+	border-radius: var(--radius);
+	background: var(--bg-hover);
+	color: var(--text-dim);
+	content: "Loading resource details…";
+}
+.detail-loading-skeleton {
+	position: absolute;
+	z-index: 10;
+	inset: 0;
+	display: grid;
+	align-content: start;
+	gap: 16px;
+	padding: 22px 16px;
+	background: var(--bg-raised);
+}
+.detail-skeleton-heading { width: 55%; height: 20px; }
+.detail-skeleton-tabs { width: 100%; height: 32px; }
+.detail-skeleton-line { width: 84%; height: 13px; }
+.detail-skeleton-line:nth-child(4) { width: 63%; }
+.detail-skeleton-line:nth-child(5) { width: 92%; }
+.detail-skeleton-line:nth-child(6) { width: 48%; }
+
+.detail-header button[title="Delete"],
+.detail-header button[title="Evict"],
+.deployment-workbench [data-workload-action="restart"],
+.deployment-workbench [data-workload-action="rollback"] {
+	border-color: var(--red);
+	color: var(--error);
+}
+.detail-header button[title="Delete"]:hover,
+.detail-header button[title="Evict"]:hover,
+.deployment-workbench [data-workload-action="restart"]:hover:not(:disabled),
+.deployment-workbench [data-workload-action="rollback"]:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--red) 18%, var(--bg-raised));
+}
+input:not([type="checkbox"]), select, textarea { max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+input:not([type="checkbox"]), select { min-height: 32px; padding: 5px 9px; }
+textarea { padding: 8px 10px; }
+input::placeholder, textarea::placeholder { color: var(--text-dim); opacity: .85; }
+
+.resource-table { border-collapse: separate; border-spacing: 0; }
+.resource-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-raised); }
+.resource-table tbody tr:focus-within { outline: 1px solid var(--accent); outline-offset: -1px; }
+.resource-table tbody tr[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised)); }
+.toolbar, .topbar { min-width: 0; }
+.detail-pane, #detail-pane { position: relative; isolation: isolate; }
+.popover, .dropdown-menu, .context-menu, .modal, dialog { box-shadow: 0 16px 48px rgb(0 0 0 / 30%); }
+
+.skeleton { position: relative; overflow: hidden; border-radius: var(--radius); background: var(--bg-hover); color: transparent !important; }
+.skeleton::after { position: absolute; inset: 0; background: linear-gradient(100deg, transparent 15%, color-mix(in srgb, var(--text) 9%, transparent) 45%, transparent 75%); content: ""; transform: translateX(-100%); animation: kui-skeleton-sweep 1.5s ease-in-out infinite; }
+.skeleton-line { display: block; width: min(100%, 32rem); height: 12px; margin: 8px 0; }
+.skeleton-row { display: grid; grid-template-columns: repeat(4, minmax(54px, 1fr)); gap: 12px; min-height: 38px; padding: 10px; }
+@keyframes kui-skeleton-sweep { to { transform: translateX(100%); } }
+
+[aria-busy="true"] { cursor: progress; }
+[role="status"], [role="alert"] { overflow-wrap: anywhere; }
+.status-badge { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 1px 8px; border: 1px solid currentColor; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.status-badge::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
+
+@media (max-width: 720px) {
+	.resource-table { min-width: 0; }
+	.toolbar, .topbar { flex-wrap: wrap; gap: 8px; }
+	.modal, dialog, .popover { max-width: calc(100vw - 20px); }
+	#detail-pane { position: absolute; }
+	#detail-pane:not([aria-busy="true"])::before { content: none; }
+}
+@media (max-width: 380px) {
+	.btn { min-height: 36px; padding: 6px 9px; }
+	.skeleton-row { grid-template-columns: repeat(2, minmax(54px, 1fr)); }
+	.resource-table th, .resource-table td { padding-right: 6px; padding-left: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media (forced-colors: active) {
+	.btn, .icon-btn, .overview-section, .status-badge { border: 1px solid ButtonText; }
+	.btn-danger, [data-danger="true"], .danger-action { outline: 2px solid Mark; }
+	.skeleton, .skeleton::after { animation: none; background: Canvas; }
+}

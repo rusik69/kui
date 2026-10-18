@@ -58,6 +58,10 @@ WebKit webview; it needs no separately installed webview runtime.
 - Filter resource tables with Kubernetes label/field selectors, sort by clicking
   or keyboard, copy names/namespaces, and page through API results.
   (200 rows by default; choose 1–1,000 rows/page and persist density.)
+
+- Download selected objects as a deterministically ordered, multi-document YAML
+  bundle (up to 100 objects and 8 MiB). Bundles include Secret data; protect
+  the downloaded file accordingly.
 - YAML view/edit-and-apply warns before discarding unsaved changes, validates
   through server-side dry-run, shows API errors inline, and can copy or download
   the current manifest. Resource delete, pod eviction, and port-forward are available.
@@ -147,22 +151,31 @@ Install the Go version declared in `go.mod`. Building, testing, and vetting
 `cmd/kui` requires cgo and the native webview development libraries: GTK 3 and
 WebKitGTK 4.0 development packages on Linux (`libgtk-3-dev` and
 `libwebkit2gtk-4.0-dev` on Ubuntu); use the platform's webview development
-dependencies on macOS and Windows. No Node/npm toolchain is needed.
+dependencies on macOS and Windows. The production application does not need
+Node.js or npm. The browser verification suite uses Node.js 22 and the pinned
+Playwright test dependency as test-only tooling.
 
 Canonical verification commands:
 
 ```sh
 make ci
-make test
+npm ci
+npx playwright install chromium
+make test-ui
 ```
 
-`make ci` runs formatting checks, `go vet`, lint, race-enabled tests with
-`coverage.out`, and a build. `make test` runs only the race-enabled tests and
-regenerates the Go coverage profile.
+On Ubuntu, install Chromium's operating-system dependencies with
+`npx playwright install --with-deps chromium`. `make ci` runs formatting
+checks, `go vet`, lint, race-enabled Go tests with `coverage.out`, and a build.
+`make test` runs only the race-enabled Go tests and regenerates the Go coverage
+profile. `make test-ui` builds the real `kui` binary and runs the pinned
+Playwright Chromium suite against a deterministic local Kubernetes API fixture;
+it does not use a cluster or kubeconfig credentials.
 
 ## Stack
 
 Go backend (`client-go` + dynamic/discovery clients), HTMX + vanilla JS
-frontend (server-rendered `html/template`, no Node/npm build step), one Go
-executable with embedded frontend assets via `go:embed`; native webview runtimes
-remain platform dependencies.
+frontend (server-rendered `html/template`, no Node/npm production build step),
+one Go executable with embedded frontend assets via `go:embed`; native webview
+runtimes remain platform dependencies. Node.js and Playwright are used only
+for browser tests.

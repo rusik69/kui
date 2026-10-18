@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	maxYAMLFormBytes = 1 << 20
-	maxDiffFormBytes = 256 << 10
-	maxBulkFormBytes = 64 << 10
+	maxYAMLFormBytes     = 1 << 20
+	maxDiffFormBytes     = 256 << 10
+	maxBulkFormBytes     = 64 << 10
+	maxYAMLBundleObjects = 100
+	maxYAMLBundleBytes   = 8 << 20
 )
 
 const defaultResourcePageSize int64 = 200
@@ -686,6 +688,93 @@ func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 		msg += fmt.Sprintf(", %d failed", failed)
 	}
 	triggerToast(w, level, msg)
+}
+
+type yamlBundleRequest struct {
+	Paths []string `json:"paths"`
+}
+
+var (
+	errInvalidYAMLBundleSelection = errors.New("invalid YAML bundle selection")
+	errYAMLBundleTooLarge         = errors.New("selected YAML bundle exceeds the 8 MiB limit")
+)
+
+func (s *Server) handleBulkYAMLExport(w http.ResponseWriter, r *http.Request) {
+	var req yamlBundleRequest
+	if !decodeJSONBody(w, r, maxBulkFormBytes, &req) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Paths) == 0 || len(req.Paths) > maxYAMLBundleObjects {
+		http.Error(w, fmt.Sprintf("select between 1 and %d resources", maxYAMLBundleObjects), http.StatusBadRequest)
+		return
+	}
+	ctxName := r.PathValue("ctx")
+	parsed := make([]metadataPath, 0, len(req.Paths))
+	seen := make(map[string]struct{}, len(req.Paths))
+	for _, path := range req.Paths {
+		ns, resource, name, ok := parseResourcePath(ctxName, path)
+		if !ok {
+			http.Error(w, "invalid resource path", http.StatusBadRequest)
+			return
+		}
+		if _, exists := seen[path]; exists {
+			http.Error(w, "duplicate resource path", http.StatusBadRequest)
+			return
+		}
+		seen[path] = struct{}{}
+		parsed = append(parsed, metadataPath{path: path, ns: ns, resource: resource, name: name})
+	}
+	c, err := s.clients(ctxName)
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	bundle, err := buildSelectedYAMLBundle(r.Context(), c, parsed)
+	if err != nil {
+		if errors.Is(err, errInvalidYAMLBundleSelection) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else if errors.Is(err, errYAMLBundleTooLarge) {
+			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+		} else {
+			writeActionError(w, err)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="kui-selected-resources.yaml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(bundle)
+}
+
+func buildSelectedYAMLBundle(ctx context.Context, c *k8s.Clients, paths []metadataPath) ([]byte, error) {
+	items := append([]metadataPath(nil), paths...)
+	sort.Slice(items, func(i, j int) bool { return items[i].path < items[j].path })
+	bundle := make([]byte, 0)
+	for _, item := range items {
+		rk, ok := resolveKind(c, item.resource)
+		if !ok {
+			return nil, fmt.Errorf("%w: unknown resource %s", errInvalidYAMLBundleSelection, item.resource)
+		}
+		if (rk.Namespaced && item.ns == "_") || (!rk.Namespaced && item.ns != "_") {
+			return nil, fmt.Errorf("%w: invalid namespace scope for %s", errInvalidYAMLBundleSelection, item.path)
+		}
+		obj, err := k8s.Get(ctx, c, rk, item.ns, item.name)
+		if err != nil {
+			return nil, fmt.Errorf("export %s: %w", item.path, err)
+		}
+		unstructured.RemoveNestedField(obj.Object, "metadata", "managedFields")
+		document, err := yaml.Marshal(obj.Object)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s: %w", item.path, err)
+		}
+		if len(bundle)+len(document)+4 > maxYAMLBundleBytes {
+			return nil, errYAMLBundleTooLarge
+		}
+		bundle = append(bundle, []byte("---\n")...)
+		bundle = append(bundle, document...)
+	}
+	return bundle, nil
 }
 
 // parseResourcePath splits a DetailURL of the form

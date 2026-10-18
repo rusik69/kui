@@ -1,36 +1,40 @@
 {{define "searchresults"}}
-{{if .Error}}<div class="error-state" role="alert">{{.Error}}</div>{{end}}
-{{if .Commands}}
-<div class="palette-group" role="group" aria-label="Commands">
-  <div class="section-title">Commands</div>
-  {{range $i, $cmd := .Commands}}
-  {{if $cmd.FullNav}}
-  <div class="palette-result {{if eq $i 0}}active{{end}}" role="option" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}"
-       data-recent-url="{{$cmd.URL}}" data-recent-label="{{$cmd.Label}}" data-recent-full-nav="true"
-       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,true);location.href=this.dataset.recentUrl">{{$cmd.Label}}</div>
-  {{else}}
-  <div class="palette-result {{if eq $i 0}}active{{end}}" role="option" aria-selected="{{if eq $i 0}}true{{else}}false{{end}}"
-       data-recent-url="{{$cmd.URL}}" data-recent-label="{{$cmd.Label}}" data-recent-full-nav="false"
-       hx-get="{{$cmd.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$cmd.URL}}"
-       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,false);kui.closePalette()">{{$cmd.Label}}</div>
-  {{end}}
-  {{end}}
-</div>
-{{end}}
-
-{{if .Objects}}
-<div class="palette-group" role="group" aria-label="Objects">
-  <div class="section-title">Objects</div>
-  {{range .Objects}}
-  <div class="palette-result" role="option" aria-selected="false"
-       data-recent-url="{{.ListURL}}" data-recent-label="{{.Kind}}/{{.Name}}{{if .Namespace}} ({{.Namespace}}){{end}}" data-recent-full-nav="false"
-       hx-get="{{.ListURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{.ListURL}}"
-       onclick="kui.recordRecent(this.dataset.recentUrl,this.dataset.recentLabel,false);kui.closePalette()">
-    {{.Kind}}/{{.Name}}{{if .Namespace}} <span class="text-dim">{{.Namespace}}</span>{{end}}
+{{if .Error}}<div class="error-state" role="alert">{{.Error}}{{if .InvalidQuery}} <span>Try <code>kind:Pod</code>, <code>namespace:"team a"</code>, or <code>name:web</code>.</span>{{else if .Truncated}} <span>Use <code>kind:</code> or <code>namespace:</code> to narrow the results.</span>{{end}}</div>{{end}}
+{{if and (not .Query) (not .Error)}}<div class="empty-state palette-empty" role="status">Type a name or qualifier such as <code>kind:Pod</code>. Press <kbd>?</kbd> for shortcuts.</div>{{end}}
+{{if .Query}}
+<div class="search-workbench" data-search-context="{{.Context}}" data-search-namespace="{{.Namespace}}" data-search-query="{{.Query}}" data-kind-filter="{{.KindFilter}}">
+  {{if or .QualifierKind .QualifierNS .QualifierName}}<div class="search-chips" aria-label="Active query filters">
+    {{if .QualifierKind}}<button type="button" class="search-chip" data-remove-qualifier="kind">kind: {{.QualifierKind}} <span aria-hidden="true">×</span><span class="sr-only">Remove kind filter</span></button>{{end}}
+    {{if .QualifierNS}}<button type="button" class="search-chip" data-remove-qualifier="namespace">namespace: {{.QualifierNS}} <span aria-hidden="true">×</span><span class="sr-only">Remove namespace filter</span></button>{{end}}
+    {{if .QualifierName}}<button type="button" class="search-chip" data-remove-qualifier="name">name: {{.QualifierName}} <span aria-hidden="true">×</span><span class="sr-only">Remove name filter</span></button>{{end}}
+  </div>{{end}}
+  {{if .Objects}}<div class="search-kind-filter"><label for="search-kind-filter">Filter results by kind</label><select id="search-kind-filter" data-search-kind-filter>
+    <option value="">All kinds ({{.Count}})</option>
+    {{range .Objects}}<option value="{{.Kind}}" {{if eq $.KindFilter .Kind}}selected{{end}}>{{.Kind}} ({{.KindCount}})</option>{{end}}
+  </select></div>{{end}}
+  {{if .Commands}}
+  <div class="palette-group" role="group" aria-label="Commands">
+    <div class="section-title">Commands</div>
+    {{range $cmd := .Commands}}
+    <div class="palette-result" role="option" aria-selected="false" data-search-result data-recent-url="{{$cmd.URL}}" data-recent-label="{{$cmd.Label}}" data-recent-full-nav="{{$cmd.FullNav}}"
+         {{if $cmd.FullNav}}data-full-nav="true"{{else}}hx-get="{{$cmd.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{$cmd.URL}}"{{end}}>{{$cmd.Label}}</div>
+    {{end}}
   </div>
   {{end}}
+  {{if .Objects}}
+  <div class="search-count" role="status">{{if .Truncated}}Showing up to {{len .Objects}} of {{.Count}} matching objects.{{else}}{{.Count}} matching objects.{{end}}</div>
+  <div class="palette-group" role="group" aria-label="Objects">
+    <div class="section-title">Objects</div>
+    {{range .Objects}}
+    <div class="palette-result" role="option" aria-selected="false" data-search-result data-search-kind="{{.Kind}}" data-recent-url="{{.ListURL}}" data-recent-label="{{.Kind}}/{{.Name}}{{if .Namespace}} ({{.Namespace}}){{end}}" data-recent-full-nav="false"
+         hx-get="{{.ListURL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{.ListURL}}">
+      {{.Kind}}/{{.Name}}{{if .Namespace}} <span class="text-dim">{{.Namespace}}</span>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+  {{if and (not .Error) (not .Commands) (not .Objects)}}<div class="empty-state palette-empty" role="status">No matches. Remove a filter or try a broader name; use <code>kind:</code>, <code>namespace:</code>, or <code>name:</code> to narrow search.</div>{{end}}
 </div>
 {{end}}
-
-{{if and (not .Error) (not .Commands) (not .Objects)}}<div class="empty-state palette-empty" role="status">No results. Try another object name or command.</div>{{end}}
+<div class="search-shortcuts" aria-label="Keyboard shortcuts"><span>↑/↓ Navigate</span><span>Enter Open</span><span>Esc Close</span><span data-search-modifier>⌘K</span><button type="button" data-search-shortcuts>Shortcuts</button></div>
 {{end}}

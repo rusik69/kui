@@ -1,6 +1,6 @@
 GOLANGCI_LINT_VERSION := v1.64.8
 
-.PHONY: build run test vet fmt fmt-fix lint tidy clean ci
+.PHONY: build run test test-ui vet fmt fmt-fix lint tidy clean ci
 
 build:
 	go build -o bin/kui ./cmd/kui
@@ -10,6 +10,9 @@ run:
 
 test:
 	go test ./... -race -coverprofile=coverage.out -covermode=atomic
+
+test-ui: build
+	npm run test:ui
 
 vet:
 	go vet ./...

@@ -2,13 +2,15 @@ package web
 
 import (
 	"context"
+	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"sync"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"time"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
@@ -21,11 +23,16 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 	if r.URL.Query().Get("frame") == "table" {
 		data, err := s.buildOverviewData(r.Context(), c, ns)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
+			data = OverviewData{
+				Context: ctxName, Namespace: ns, UpdatedAt: time.Now().UTC(),
+				Error: "Overview data is unavailable. Check cluster access and use Refresh to retry.",
+			}
 		}
 		data.Context = ctxName
 		data.Namespace = ns
+		for i := range data.EventGroups {
+			data.EventGroups[i].URL = fmt.Sprintf("/c/%s/%s/events?fieldSelector=%s", ctxName, nsOrDash(ns), url.QueryEscape("type="+data.EventGroups[i].Type+",reason="+data.EventGroups[i].Reason))
+		}
 		s.render(w, "overview", data)
 		return
 	}
@@ -43,7 +50,7 @@ func (s *Server) renderOverview(w http.ResponseWriter, r *http.Request, ctxName,
 }
 
 func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns string) (OverviewData, error) {
-	var d OverviewData
+	d := OverviewData{UpdatedAt: time.Now().UTC()}
 
 	var (
 		nodes    *corev1.NodeList
@@ -55,7 +62,8 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 		pods    *corev1.PodList
 		podsErr error
 
-		events *corev1.EventList
+		events    *corev1.EventList
+		eventsErr error
 	)
 
 	var wg sync.WaitGroup
@@ -74,7 +82,7 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 	}()
 	go func() {
 		defer wg.Done()
-		events, _ = c.Clientset.CoreV1().Events(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
+		events, eventsErr = c.Clientset.CoreV1().Events(nsOrAll(ns)).List(ctx, metav1.ListOptions{})
 	}()
 
 	fanCtx, cancel := context.WithTimeout(ctx, fanOutTimeout)
@@ -91,6 +99,10 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 	if podsErr != nil {
 		return d, podsErr
 	}
+	d.EventsAvailable = eventsErr == nil
+	if eventsErr != nil {
+		d.EventsError = "Event data is unavailable for this namespace."
+	}
 
 	d.NodeCount = len(nodes.Items)
 	for _, n := range nodes.Items {
@@ -105,7 +117,7 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 	d.NamespaceCount = len(namespaces)
 
 	tally := tallyPodPhases(pods.Items)
-	d.PodRunning, d.PodPending, d.PodFailed = tally.Running, tally.Pending, tally.Unhealthy
+	d.PodRunning, d.PodPending, d.PodFailed = tally.Running, tally.Pending, tally.Failed
 
 	d.PodsUsed = int64(len(pods.Items))
 	for _, p := range pods.Items {
@@ -123,13 +135,14 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 				}
 				detail := strconv.Itoa(ready) + "/" + strconv.Itoa(len(p.Spec.Containers))
 				d.NeedsAttention = append(d.NeedsAttention, AttentionItem{
-					Name: p.Name, Namespace: p.Namespace, Reason: state, Detail: detail,
+					Name: p.Name, Namespace: p.Namespace, Reason: state, Detail: detail, Severity: attentionSeverity(state),
 				})
 			}
 		}
 	}
 
 	if events != nil {
+		d.EventGroups, d.MoreEventGroups = groupEvents(events.Items)
 		var warnings []corev1.Event
 		for _, ev := range events.Items {
 			if ev.Type == corev1.EventTypeWarning {
@@ -138,32 +151,95 @@ func (s *Server) buildOverviewData(ctx context.Context, c *k8s.Clients, ns strin
 		}
 		d.WarningCount = len(warnings)
 		sort.Slice(warnings, func(i, j int) bool {
-			return warnings[i].LastTimestamp.Time.After(warnings[j].LastTimestamp.Time)
+			return eventTimestamp(warnings[i]).After(eventTimestamp(warnings[j]))
 		})
 		for i, ev := range warnings {
 			if i >= 5 {
 				break
 			}
 			d.RecentWarnings = append(d.RecentWarnings, Event{
-				Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Age: age(ev.LastTimestamp.Time),
+				Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Age: age(eventTimestamp(ev)),
 			})
 		}
 
 		activity := append([]corev1.Event{}, events.Items...)
 		sort.Slice(activity, func(i, j int) bool {
-			return activity[i].LastTimestamp.Time.After(activity[j].LastTimestamp.Time)
+			return eventTimestamp(activity[i]).After(eventTimestamp(activity[j]))
 		})
 		for i, ev := range activity {
 			if i >= 8 {
 				break
 			}
 			d.RecentActivity = append(d.RecentActivity, Event{
-				Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Age: age(ev.LastTimestamp.Time),
+				Type: ev.Type, Reason: ev.Reason, Message: ev.Message, Age: age(eventTimestamp(ev)),
 			})
 		}
 	}
 
 	return d, nil
+}
+
+func attentionSeverity(reason string) string {
+	switch reason {
+	case "Failed", "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "OOMKilled", "CreateContainerError":
+		return "critical"
+	default:
+		return "warning"
+	}
+}
+
+func eventTimestamp(event corev1.Event) time.Time {
+	if !event.LastTimestamp.IsZero() {
+		return event.LastTimestamp.Time
+	}
+	if !event.EventTime.IsZero() {
+		return event.EventTime.Time
+	}
+	return event.CreationTimestamp.Time
+}
+
+func groupEvents(events []corev1.Event) ([]EventGroup, int) {
+	type eventKey struct{ eventType, reason string }
+	type summary struct {
+		count  int
+		latest time.Time
+	}
+	grouped := make(map[eventKey]summary)
+	for _, event := range events {
+		key := eventKey{eventType: event.Type, reason: event.Reason}
+		item := grouped[key]
+		item.count++
+		latest := eventTimestamp(event)
+		if latest.After(item.latest) {
+			item.latest = latest
+		}
+		grouped[key] = item
+	}
+
+	groups := make([]EventGroup, 0, len(grouped))
+	for key, item := range grouped {
+		latestAge := "unknown"
+		if !item.latest.IsZero() {
+			latestAge = age(item.latest)
+		}
+		groups = append(groups, EventGroup{
+			Type: key.eventType, Reason: key.reason, Count: item.count, LatestAge: latestAge,
+		})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Count != groups[j].Count {
+			return groups[i].Count > groups[j].Count
+		}
+		if groups[i].Type != groups[j].Type {
+			return groups[i].Type < groups[j].Type
+		}
+		return groups[i].Reason < groups[j].Reason
+	})
+	more := max(0, len(groups)-8)
+	if len(groups) > 8 {
+		groups = groups[:8]
+	}
+	return groups, more
 }
 
 // nodeReady extracts the shared Ready-condition check also used by

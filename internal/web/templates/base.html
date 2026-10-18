@@ -9,6 +9,11 @@
 <title>kui &middot; {{.ContextName}}</title>
 <link rel="stylesheet" href="/static/vendor/xterm.css">
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/table_workbench.css">
+<link rel="stylesheet" href="/static/search_workbench.css">
+<link rel="stylesheet" href="/static/dashboard.css">
+<link rel="stylesheet" href="/static/accessibility.css">
+<link rel="stylesheet" href="/static/polish.css">
 <script src="/static/vendor/htmx.min.js"></script>
 <script src="/static/vendor/htmx-sse.js"></script>
 <script src="/static/vendor/xterm.js"></script>
@@ -90,6 +95,10 @@
   <span id="watch-state-label" class="watch-state-label" role="status" aria-live="polite" aria-atomic="true">Connecting to live updates</span>
 </div>
 <script src="/static/app.js"></script>
+<script src="/static/table_workbench.js"></script>
+<script src="/static/search_workbench.js"></script>
+<script src="/static/dashboard.js"></script>
+<script src="/static/accessibility.js"></script>
 </body>
 </html>
 {{end}}
@@ -105,6 +114,7 @@
   <span id="bulk-count"></span>
   <button class="btn" onclick="kui.copySelectedNames()">Copy names</button>
   <button class="btn" onclick="kui.selectAllPage()">Select all rows on page</button>
+  <button class="btn" id="bulk-yaml-export" title="The bundle can contain Secret data; maximum 100 resources and 8 MiB." aria-description="Downloads selected resources in sorted order as YAML and may include Secret data." onclick="kui.downloadSelectedYAMLBundle()">Download selected YAML</button>
   <button class="btn" onclick="kui.clearSelection()">Clear selection</button>
   <button class="btn btn-danger" onclick="kui.bulkDelete()">Delete selected</button>
 </div>

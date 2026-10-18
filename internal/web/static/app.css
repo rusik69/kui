@@ -1042,7 +1042,7 @@ button:disabled, input:disabled, select:disabled {
 .resource-table tbody tr:hover {
 	box-shadow: inset 3px 0 var(--accent);
 }
-.resource-table tbody tr.selected { background: var(--accent-dim); color: #fff; }
+.resource-table tbody tr.selected { background: var(--accent-dim); color: var(--text); }
 .resource-table tbody tr[tabindex="0"]:focus-visible {
 	position: relative;
 	z-index: 1;

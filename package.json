@@ -1,0 +1,12 @@
+{
+  "name": "kui-ui-verification",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Test-only browser verification for kui",
+  "scripts": {
+    "test:ui": "playwright test --config=tests/ui/playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

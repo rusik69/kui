@@ -6,17 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rusik69/kui/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/rusik69/kui/internal/k8s"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/dynamic"
 )
 
 // wsReader/wsWriter adapt a gorilla websocket connection to io.Reader/io.Writer
@@ -385,4 +388,247 @@ func (s *Server) handleDeploymentHistory(w http.ResponseWriter, r *http.Request)
 		})
 	}
 	s.render(w, "history", views)
+}
+
+const maxWorkloadBody = 16 << 10
+const maxMetadataBatch = 100
+
+type deploymentRequest struct {
+	Replicas *int32 `json:"replicas"`
+	Action   string `json:"action"`
+	Revision int64  `json:"revision"`
+}
+
+func (s *Server) handleDeploymentScale(w http.ResponseWriter, r *http.Request) {
+	var req deploymentRequest
+	if !decodeJSONBody(w, r, maxWorkloadBody, &req) || req.Replicas == nil || *req.Replicas < 0 || *req.Replicas > 100000 {
+		http.Error(w, "replicas must be an integer from 0 to 100000", http.StatusBadRequest)
+		return
+	}
+	c, err := s.clients(r.PathValue("ctx"))
+	if err == nil {
+		err = k8s.ScaleDeployment(r.Context(), c, r.PathValue("ns"), r.PathValue("name"), *req.Replicas)
+	}
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "replicas": *req.Replicas})
+}
+
+func (s *Server) handleDeploymentAction(w http.ResponseWriter, r *http.Request) {
+	var req deploymentRequest
+	if !decodeJSONBody(w, r, maxWorkloadBody, &req) || (req.Action != "restart" && req.Action != "pause" && req.Action != "resume" && req.Action != "rollback") {
+		http.Error(w, "invalid Deployment action", http.StatusBadRequest)
+		return
+	}
+	if req.Action == "rollback" && req.Revision < 1 {
+		http.Error(w, "a positive revision is required", http.StatusBadRequest)
+		return
+	}
+	c, err := s.clients(r.PathValue("ctx"))
+	if err == nil {
+		err = k8s.DeploymentAction(r.Context(), c, r.PathValue("ns"), r.PathValue("name"), req.Action, req.Revision)
+	}
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "action": req.Action})
+}
+
+type metadataRequest struct {
+	Paths   []string `json:"paths"`
+	Kind    string   `json:"kind"`
+	Action  string   `json:"action"`
+	Key     string   `json:"key"`
+	Value   string   `json:"value"`
+	Preview bool     `json:"preview"`
+}
+
+type metadataOutcome struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Patch   any    `json:"patch,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Success bool   `json:"success"`
+}
+type metadataPath struct{ path, ns, resource, name string }
+
+func (s *Server) handleBulkMetadata(w http.ResponseWriter, r *http.Request) {
+	var req metadataRequest
+	if !decodeJSONBody(w, r, 64<<10, &req) {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Paths) == 0 || len(req.Paths) > maxMetadataBatch || (req.Kind != "labels" && req.Kind != "annotations") ||
+		(req.Action != "add" && req.Action != "update" && req.Action != "remove") {
+		http.Error(w, "invalid metadata batch", http.StatusBadRequest)
+		return
+	}
+	if errs := validation.IsQualifiedName(req.Key); len(errs) > 0 || req.Key == "" {
+		http.Error(w, "invalid metadata key", http.StatusBadRequest)
+		return
+	}
+	if req.Action != "remove" {
+		if req.Kind == "labels" && len(validation.IsValidLabelValue(req.Value)) > 0 {
+			http.Error(w, "invalid label value", http.StatusBadRequest)
+			return
+		}
+		if req.Kind == "annotations" && len(req.Value) > 256*1024 {
+			http.Error(w, "annotation value is too large", http.StatusBadRequest)
+			return
+		}
+	}
+	ctxName := r.PathValue("ctx")
+	parsed := make([]metadataPath, 0, len(req.Paths))
+	seen := map[string]bool{}
+	for _, p := range req.Paths {
+		ns, resource, name, ok := parseResourcePath(ctxName, p)
+		if !ok || seen[p] {
+			http.Error(w, "invalid or duplicate resource path", http.StatusBadRequest)
+			return
+		}
+		seen[p] = true
+		parsed = append(parsed, metadataPath{p, ns, resource, name})
+	}
+	c, err := s.clients(ctxName)
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	outcomes := performMetadataBatch(r.Context(), c, req, parsed)
+	writeJSON(w, http.StatusOK, map[string]any{"outcomes": outcomes, "preview": req.Preview})
+}
+
+func performMetadataBatch(ctx context.Context, c *k8s.Clients, req metadataRequest, parsed []metadataPath) []metadataOutcome {
+	outcomes := make([]metadataOutcome, 0, len(parsed))
+	for _, item := range parsed {
+		rk, ok := k8s.ByName(item.resource)
+		if !ok {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "unsupported resource kind"})
+			continue
+		}
+		resource := c.Dynamic.Resource(rk.GVR)
+		var client dynamic.ResourceInterface = resource
+		if rk.Namespaced {
+			if item.ns == "_" {
+				outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "namespace required"})
+				continue
+			}
+			client = resource.Namespace(item.ns)
+		} else if item.ns != "_" {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "cluster resource path has namespace"})
+			continue
+		}
+		obj, getErr := client.Get(ctx, item.name, metav1.GetOptions{})
+		if getErr != nil {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: getErr.Error()})
+			continue
+		}
+		metadata := map[string]any{"resourceVersion": obj.GetResourceVersion()}
+		patchValues := map[string]any{}
+		current := obj.GetLabels()
+		if req.Kind == "annotations" {
+			current = obj.GetAnnotations()
+		}
+		_, exists := current[req.Key]
+		switch req.Action {
+		case "add":
+			if exists {
+				outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "key already exists"})
+				continue
+			}
+			patchValues[req.Key] = req.Value
+		case "update":
+			if !exists {
+				outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "key does not exist"})
+				continue
+			}
+			patchValues[req.Key] = req.Value
+		case "remove":
+			if !exists {
+				outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "key does not exist"})
+				continue
+			}
+			patchValues[req.Key] = nil
+		default:
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Error: "invalid action"})
+			continue
+		}
+		metadata[req.Kind] = patchValues
+		patch := map[string]any{"metadata": metadata}
+		if req.Preview {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Patch: patch, Success: true})
+			continue
+		}
+		data, _ := json.Marshal(patch)
+		_, patchErr := client.Patch(ctx, item.name, types.MergePatchType, data, metav1.PatchOptions{})
+		if patchErr != nil {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Patch: patch, Error: patchErr.Error()})
+		} else {
+			outcomes = append(outcomes, metadataOutcome{Path: item.path, Name: item.name, Patch: patch, Success: true})
+		}
+	}
+	return outcomes
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, limit int64, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if dec.Decode(target) != nil {
+		return false
+	}
+	var extra any
+	return dec.Decode(&extra) == io.EOF
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeActionError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	if apierrors.IsConflict(err) {
+		status = http.StatusConflict
+	} else if apierrors.IsNotFound(err) {
+		status = http.StatusNotFound
+	} else if apierrors.IsInvalid(err) {
+		status = http.StatusUnprocessableEntity
+	}
+	http.Error(w, err.Error(), status)
+}
+
+func (s *Server) handleDeploymentStatus(w http.ResponseWriter, r *http.Request) {
+	c, err := s.clients(r.PathValue("ctx"))
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	deployment, err := c.Clientset.AppsV1().Deployments(r.PathValue("ns")).Get(r.Context(), r.PathValue("name"), metav1.GetOptions{})
+	if err != nil {
+		writeActionError(w, err)
+		return
+	}
+	conditions := make([]map[string]string, 0, len(deployment.Status.Conditions))
+	for _, condition := range deployment.Status.Conditions {
+		conditions = append(conditions, map[string]string{"type": string(condition.Type), "status": string(condition.Status), "reason": condition.Reason, "message": condition.Message})
+	}
+	desired := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desired = *deployment.Spec.Replicas
+	}
+	revisions, historyErr := k8s.DeploymentHistory(r.Context(), c, r.PathValue("ns"), r.PathValue("name"))
+	historyMessage := ""
+	if historyErr != nil {
+		historyMessage = historyErr.Error()
+	}
+	availableRevisions := make([]int, 0, len(revisions))
+	for _, revision := range revisions {
+		availableRevisions = append(availableRevisions, revision.Revision)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"desired": desired, "current": deployment.Status.Replicas, "updated": deployment.Status.UpdatedReplicas, "available": deployment.Status.AvailableReplicas, "paused": deployment.Spec.Paused, "conditions": conditions, "revisions": availableRevisions, "historyError": historyMessage})
 }

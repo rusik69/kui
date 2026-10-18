@@ -143,8 +143,20 @@ func TestBuildOverviewData(t *testing.T) {
 	if data.PodRunning != 2 {
 		t.Errorf("expected 2 pods counted Running by phase (both are phase=Running), got %d", data.PodRunning)
 	}
+	if data.PodFailed != 0 {
+		t.Errorf("expected only phase=Failed pods in the failed tile, got %d", data.PodFailed)
+	}
 	if data.WarningCount != 1 {
 		t.Errorf("expected 1 warning event, got %d", data.WarningCount)
+	}
+	if data.UpdatedAt.IsZero() {
+		t.Error("expected overview refresh timestamp")
+	}
+	if !data.EventsAvailable {
+		t.Error("expected event section to be marked available")
+	}
+	if len(data.EventGroups) != 1 || data.EventGroups[0].Type != corev1.EventTypeWarning || data.EventGroups[0].Reason != "BackOff" || data.EventGroups[0].Count != 1 {
+		t.Errorf("expected one aggregated BackOff event group, got %+v", data.EventGroups)
 	}
 
 	if len(data.NeedsAttention) != 1 || data.NeedsAttention[0].Name != "crashy" {
@@ -152,6 +164,9 @@ func TestBuildOverviewData(t *testing.T) {
 	}
 	if data.NeedsAttention[0].Reason != "CrashLoopBackOff" {
 		t.Errorf("expected NeedsAttention reason CrashLoopBackOff, got %q", data.NeedsAttention[0].Reason)
+	}
+	if data.NeedsAttention[0].Severity != "critical" {
+		t.Errorf("expected CrashLoopBackOff severity critical, got %q", data.NeedsAttention[0].Severity)
 	}
 
 	if data.CPUAllocatableMilli != 4000 {

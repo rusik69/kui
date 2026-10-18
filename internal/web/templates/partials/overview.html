@@ -1,115 +1,173 @@
 {{define "overview"}}
-<div class="toolbar">
-  <h1 class="toolbar-title">Cluster Overview</h1>
-</div>
-<div class="tile-grid">
-  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/nodes"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/nodes" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/nodes" aria-label="Open nodes">
-    <span class="value">{{.NodeReadyCount}}/{{.NodeCount}}</span>
-    <span class="label">Nodes ready</span>
-  </a>
-  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" aria-label="Open running pods">
-    <span class="value">{{.PodRunning}}</span>
-    <span class="label">Pods running</span>
-  </a>
-  <a class="stat-tile stat-tile-link {{if gt .PodPending 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" aria-label="Open pending pods">
-    <span class="value">{{.PodPending}}</span>
-    <span class="label">Pods pending</span>
-  </a>
-  <a class="stat-tile stat-tile-link {{if gt .PodFailed 0}}danger{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" aria-label="Open failed pods">
-    <span class="value">{{.PodFailed}}</span>
-    <span class="label">Pods failed</span>
-  </a>
-  <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/namespaces"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/namespaces" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/namespaces" aria-label="Open namespaces">
-    <span class="value">{{.NamespaceCount}}</span>
-    <span class="label">Namespaces</span>
-  </a>
-  <a class="stat-tile stat-tile-link {{if gt .WarningCount 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning"
-     hx-get="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" aria-label="Open warning events">
-    <span class="value">{{.WarningCount}}</span>
-    <span class="label">Warning events</span>
-  </a>
-</div>
-
-<div class="section-title">Capacity</div>
-<div class="capacity-row">
-  <div class="capacity-bar">
-    <div class="capacity-label"><span>CPU</span><span>{{pct .CPURequestedMilli .CPUAllocatableMilli}}%</span></div>
-    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .CPURequestedMilli .CPUAllocatableMilli}}" aria-label="CPU requested capacity">
-      <div class="bar-fill {{if ge (pct .CPURequestedMilli .CPUAllocatableMilli) 80}}bar-fill-warning{{end}}" style="width:{{pct .CPURequestedMilli .CPUAllocatableMilli}}%"></div>
+<div class="overview-shell" id="overview" data-context="{{.Context}}" data-namespace="{{.Namespace}}">
+  <div class="toolbar overview-toolbar">
+    <div>
+      <h1 class="toolbar-title">Cluster Overview</h1>
+      <p class="overview-scope">{{if eq .Namespace "_all"}}All namespaces{{else}}{{.Namespace}}{{end}}</p>
     </div>
-    <div class="capacity-sub">{{cpuFmt .CPURequestedMilli}} requested of {{cpuFmt .CPUAllocatableMilli}}</div>
-  </div>
-  <div class="capacity-bar">
-    <div class="capacity-label"><span>Memory</span><span>{{pct .MemRequestedBytes .MemAllocatableBytes}}%</span></div>
-    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .MemRequestedBytes .MemAllocatableBytes}}" aria-label="Memory requested capacity">
-      <div class="bar-fill {{if ge (pct .MemRequestedBytes .MemAllocatableBytes) 80}}bar-fill-warning{{end}}" style="width:{{pct .MemRequestedBytes .MemAllocatableBytes}}%"></div>
+    <div class="overview-controls">
+      <time id="overview-updated" datetime="{{.UpdatedAt.Format "2006-01-02T15:04:05Z07:00"}}">Updated {{.UpdatedAt.Format "15:04:05"}}</time>
+      <button class="btn" id="overview-refresh" type="button">Refresh</button>
+      <span id="overview-refresh-status" class="sr-only" role="status" aria-live="polite"></span>
+      <button class="btn" id="overview-settings-button" type="button" aria-controls="overview-settings-panel" aria-expanded="false">Customize</button>
     </div>
-    <div class="capacity-sub">{{memFmt .MemRequestedBytes}} requested of {{memFmt .MemAllocatableBytes}}</div>
   </div>
-  <div class="capacity-bar">
-    <div class="capacity-label"><span>Pods</span><span>{{pct .PodsUsed .PodsAllocatable}}%</span></div>
-    <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .PodsUsed .PodsAllocatable}}" aria-label="Pods allocated">
-      <div class="bar-fill {{if ge (pct .PodsUsed .PodsAllocatable) 80}}bar-fill-warning{{end}}" style="width:{{pct .PodsUsed .PodsAllocatable}}%"></div>
+  <section class="overview-settings" id="overview-settings-panel" aria-label="Customize overview" hidden>
+    <strong>Dashboard sections</strong>
+    <label><input type="checkbox" data-toggle-section="capacity" checked> Capacity</label>
+    <label><input type="checkbox" data-toggle-section="objects" checked> Objects</label>
+    <label><input type="checkbox" data-toggle-section="attention" checked> Needs attention</label>
+    <label><input type="checkbox" data-toggle-section="activity" checked> Recent activity</label>
+    <label><input type="checkbox" data-toggle-section="warnings" checked> Recent warnings</label>
+    <label><input type="checkbox" data-toggle-section="event-groups" checked> Event summary</label>
+    <button class="btn" id="overview-settings-reset" type="button">Reset overview layout</button>
+  </section>
+  {{if .Error}}<section class="overview-error error-state" id="overview-error" role="alert"><h2>Overview unavailable</h2><p>{{.Error}}</p></section>{{else}}
+  <section class="overview-section" data-overview-section="health" aria-label="Cluster health">
+    <h2 class="section-title">Cluster health</h2>
+    <div class="tile-grid">
+      <div class="stat-tile-shell" data-overview-tile="nodes">
+        <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/nodes"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/nodes" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/nodes" aria-label="Open nodes">
+          <span class="value">{{.NodeReadyCount}}/{{.NodeCount}}</span><span class="label">Nodes ready</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="nodes" aria-label="Pin nodes ready tile" aria-pressed="false">Pin</button>
+      </div>
+      <div class="stat-tile-shell" data-overview-tile="running">
+        <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DRunning" aria-label="Open running pods">
+          <span class="value">{{.PodRunning}}</span><span class="label">Pods running</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="running" aria-label="Pin running pods tile" aria-pressed="false">Pin</button>
+      </div>
+      <div class="stat-tile-shell" data-overview-tile="pending">
+        <a class="stat-tile stat-tile-link {{if gt .PodPending 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DPending" aria-label="Open pending pods">
+          <span class="value">{{.PodPending}}</span><span class="label">Pods pending</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="pending" aria-label="Pin pending pods tile" aria-pressed="false">Pin</button>
+      </div>
+      <div class="stat-tile-shell" data-overview-tile="failed">
+        <a class="stat-tile stat-tile-link {{if gt .PodFailed 0}}danger{{end}}" href="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/pods?fieldSelector=status.phase%3DFailed" aria-label="Open failed pods">
+          <span class="value">{{.PodFailed}}</span><span class="label">Pods failed</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="failed" aria-label="Pin failed pods tile" aria-pressed="false">Pin</button>
+      </div>
+      <div class="stat-tile-shell" data-overview-tile="namespaces">
+        <a class="stat-tile stat-tile-link" href="/c/{{.Context}}/{{.Namespace}}/namespaces"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/namespaces" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/namespaces" aria-label="Open namespaces">
+          <span class="value">{{.NamespaceCount}}</span><span class="label">Namespaces</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="namespaces" aria-label="Pin namespaces tile" aria-pressed="false">Pin</button>
+      </div>
+      <div class="stat-tile-shell" data-overview-tile="warnings">
+        <a class="stat-tile stat-tile-link {{if gt .WarningCount 0}}warn{{end}}" href="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning"
+           hx-get="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" hx-target="#content" hx-swap="innerHTML"
+           hx-push-url="/c/{{.Context}}/{{.Namespace}}/events?fieldSelector=type%3DWarning" aria-label="Open warning events">
+          <span class="value">{{.WarningCount}}</span><span class="label">Warning events</span>
+        </a>
+        <button class="overview-pin" type="button" data-pin-tile="warnings" aria-label="Pin warning events tile" aria-pressed="false">Pin</button>
+      </div>
     </div>
-    <div class="capacity-sub">{{.PodsUsed}} of {{.PodsAllocatable}}</div>
-  </div>
-</div>
-
-{{if .ObjectCounts}}
-<div class="section-title">Objects</div>
-<div class="objects-panel">
-  {{range .ObjectCounts}}
-  <a class="object-row object-row-link" href="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}"
-     hx-get="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" hx-target="#content" hx-swap="innerHTML"
-     hx-push-url="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" aria-label="Open {{.Kind}}">
-    <span class="object-kind">{{.Kind}}</span>
-    <span class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.BarPercent}}" aria-label="{{.Kind}} count share"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
-    <span class="object-count">{{.Count}}</span>
-  </a>
+  </section>
+  <section class="overview-section" data-overview-section="capacity" aria-label="Resource capacity">
+    <h2 class="section-title">Capacity</h2>
+    <div class="capacity-row">
+      <div class="capacity-bar">
+        <div class="capacity-label"><span>CPU</span><span>{{pct .CPURequestedMilli .CPUAllocatableMilli}}%</span></div>
+        <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .CPURequestedMilli .CPUAllocatableMilli}}" aria-label="CPU requested capacity">
+          <div class="bar-fill {{if ge (pct .CPURequestedMilli .CPUAllocatableMilli) 80}}bar-fill-warning{{end}}" style="width:{{pct .CPURequestedMilli .CPUAllocatableMilli}}%"></div>
+        </div>
+        <div class="capacity-sub">{{cpuFmt .CPURequestedMilli}} requested of {{cpuFmt .CPUAllocatableMilli}}</div>
+      </div>
+      <div class="capacity-bar">
+        <div class="capacity-label"><span>Memory</span><span>{{pct .MemRequestedBytes .MemAllocatableBytes}}%</span></div>
+        <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .MemRequestedBytes .MemAllocatableBytes}}" aria-label="Memory requested capacity">
+          <div class="bar-fill {{if ge (pct .MemRequestedBytes .MemAllocatableBytes) 80}}bar-fill-warning{{end}}" style="width:{{pct .MemRequestedBytes .MemAllocatableBytes}}%"></div>
+        </div>
+        <div class="capacity-sub">{{memFmt .MemRequestedBytes}} requested of {{memFmt .MemAllocatableBytes}}</div>
+      </div>
+      <div class="capacity-bar">
+        <div class="capacity-label"><span>Pods</span><span>{{pct .PodsUsed .PodsAllocatable}}%</span></div>
+        <div class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{pct .PodsUsed .PodsAllocatable}}" aria-label="Pods allocated">
+          <div class="bar-fill {{if ge (pct .PodsUsed .PodsAllocatable) 80}}bar-fill-warning{{end}}" style="width:{{pct .PodsUsed .PodsAllocatable}}%"></div>
+        </div>
+        <div class="capacity-sub">{{.PodsUsed}} of {{.PodsAllocatable}}</div>
+      </div>
+    </div>
+  </section>
+  <section class="overview-section" data-overview-section="objects" aria-label="Resource counts">
+    <h2 class="section-title">Objects</h2>
+    <div class="objects-panel">
+      {{if .ObjectCounts}}
+      {{range .ObjectCounts}}
+      <a class="object-row object-row-link" href="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}"
+         hx-get="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" hx-target="#content" hx-swap="innerHTML"
+         hx-push-url="/c/{{$.Context}}/{{$.Namespace}}/{{.Name}}" aria-label="Open {{.Kind}}">
+        <span class="object-kind">{{.Kind}}</span>
+        <span class="bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.BarPercent}}" aria-label="{{.Kind}} count share"><span class="bar-fill {{if .Failing}}bar-fill-danger{{end}}" style="width:{{.BarPercent}}%"></span></span>
+        <span class="object-count">{{.Count}}</span>
+      </a>
+      {{end}}
+      {{else}}<p class="empty-state">No resource counts are available.</p>{{end}}
+    </div>
+  </section>
+  <section class="overview-section" data-overview-section="attention" aria-label="Needs attention">
+    <div class="overview-section-heading">
+      <h2 class="section-title">Needs attention</h2>
+      <label class="overview-filter">Severity
+        <select id="attention-severity" aria-label="Filter attention items by severity">
+          <option value="all">All severities</option><option value="critical">Critical</option><option value="warning">Warning</option>
+        </select>
+      </label>
+    </div>
+    <table class="resource-table">
+      <thead><tr><th>Name</th><th>Severity</th><th>Reason</th><th>Ready</th></tr></thead>
+      <tbody>
+        {{if not .NeedsAttention}}<tr><td colspan="4" class="empty-state">No unhealthy pods in this namespace scope.</td></tr>{{end}}
+        {{range .NeedsAttention}}<tr data-severity="{{.Severity}}"><td><a class="attention-link" href="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}"
+          hx-get="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}" hx-target="#detail-pane" hx-swap="innerHTML"
+          aria-label="Open pod {{.Name}} in namespace {{.Namespace}}">{{.Name}}</a></td><td>{{.Severity}}</td><td>{{.Reason}}</td><td>{{.Detail}}</td></tr>{{end}}
+        <tr id="attention-filter-empty" hidden><td colspan="4" class="empty-state">No attention items match this severity.</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="overview-section" data-overview-section="activity" aria-label="Recent activity">
+    <h2 class="section-title">Recent activity</h2>
+    <table class="resource-table">
+      <thead><tr><th>Age</th><th>Type</th><th>Reason</th><th>Message</th></tr></thead>
+      <tbody>{{if not .EventsAvailable}}<tr><td colspan="4" class="error-state" role="status">{{if .EventsError}}{{.EventsError}}{{else}}Event data is unavailable.{{end}}</td></tr>{{else if not .RecentActivity}}<tr><td colspan="4" class="empty-state">No recent activity.</td></tr>{{end}}
+        {{range .RecentActivity}}<tr><td>{{.Age}}</td><td>{{.Type}}</td><td>{{.Reason}}</td><td>{{.Message}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </section>
+  <section class="overview-section" data-overview-section="warnings" aria-label="Recent warnings">
+    <h2 class="section-title">Recent warnings</h2>
+    <table class="resource-table">
+      <thead><tr><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
+      <tbody>{{if not .EventsAvailable}}<tr><td colspan="3" class="error-state" role="status">{{if .EventsError}}{{.EventsError}}{{else}}Event data is unavailable.{{end}}</td></tr>{{else if not .RecentWarnings}}<tr><td colspan="3" class="empty-state">No recent warnings.</td></tr>{{end}}
+        {{range .RecentWarnings}}<tr><td>{{.Reason}}</td><td>{{.Age}}</td><td>{{.Message}}</td></tr>{{end}}
+      </tbody>
+    </table>
+  </section>
+  <section class="overview-section" data-overview-section="event-groups" aria-label="Event summary">
+    <h2 class="section-title">Event summary</h2>
+    {{if not .EventsAvailable}}<div class="error-state" role="status">{{if .EventsError}}{{.EventsError}}{{else}}Event data is unavailable.{{end}}</div>
+    {{else if not .EventGroups}}<p class="empty-state">No events in this namespace scope.</p>
+    {{else}}
+    <table class="resource-table">
+      <thead><tr><th>Type</th><th>Reason</th><th>Count</th><th>Latest</th></tr></thead>
+      <tbody>{{range .EventGroups}}<tr><td><a href="{{.URL}}" hx-get="{{.URL}}" hx-target="#content" hx-swap="innerHTML" hx-push-url="{{.URL}}">{{.Type}}</a></td><td>{{.Reason}}</td><td>{{.Count}}</td><td>{{.LatestAge}}</td></tr>{{end}}</tbody>
+    </table>
+    {{if gt .MoreEventGroups 0}}<p class="text-dim">Showing the most frequent 8 event groups; {{.MoreEventGroups}} more groups are available in Events.</p>{{end}}
+    {{end}}
+  </section>
   {{end}}
 </div>
-{{end}}
-
-{{if .NeedsAttention}}
-<div class="section-title">Needs attention</div>
-<table class="resource-table">
-  <thead><tr><th>Name</th><th>Reason</th><th>Ready</th></tr></thead>
-  <tbody>
-    {{range .NeedsAttention}}<tr><td><a class="attention-link" href="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}"
-      hx-get="/c/{{$.Context}}/{{.Namespace}}/pods/{{.Name}}" hx-target="#detail-pane" hx-swap="innerHTML"
-      aria-label="Open pod {{.Name}} in namespace {{.Namespace}}">{{.Name}}</a></td><td>{{.Reason}}</td><td>{{.Detail}}</td></tr>{{end}}
-  </tbody>
-</table>
-{{end}}
-
-{{if .RecentActivity}}
-<div class="section-title">Recent activity</div>
-<table class="resource-table">
-  <thead><tr><th>Age</th><th>Reason</th><th>Message</th></tr></thead>
-  <tbody>
-    {{range .RecentActivity}}<tr><td>{{.Age}}</td><td>{{.Reason}}</td><td>{{.Message}}</td></tr>{{end}}
-  </tbody>
-</table>
-{{end}}
-
-{{if .RecentWarnings}}
-<div class="section-title">Recent warnings</div>
-<table class="resource-table">
-  <thead><tr><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
-  <tbody>
-    {{range .RecentWarnings}}<tr><td>{{.Reason}}</td><td>{{.Age}}</td><td>{{.Message}}</td></tr>{{end}}
-  </tbody>
-</table>
-{{end}}
 {{end}}

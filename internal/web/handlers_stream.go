@@ -148,6 +148,22 @@ func (s *Server) writeSSE(w http.ResponseWriter, flusher http.Flusher, payload s
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns, name := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("name")
 	container := r.URL.Query().Get("container")
+	previous := r.URL.Query().Get("previous")
+	timestamps := r.URL.Query().Get("timestamps")
+	since := r.URL.Query().Get("since")
+	if previous != "" && previous != "true" || timestamps != "" && timestamps != "true" {
+		http.Error(w, "invalid log options", http.StatusBadRequest)
+		return
+	}
+	var sinceSeconds *int64
+	if since != "" {
+		value, parseErr := strconv.ParseInt(since, 10, 64)
+		if parseErr != nil || value < 60 || value > 604800 {
+			http.Error(w, "since must be between 60 and 604800 seconds", http.StatusBadRequest)
+			return
+		}
+		sinceSeconds = &value
+	}
 	tail := int64(500)
 	if rawTail := r.URL.Query().Get("tailLines"); rawTail != "" {
 		value, err := strconv.ParseInt(rawTail, 10, 64)
@@ -164,7 +180,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stream, err := k8s.StreamLogs(r.Context(), c, ns, name, k8s.LogOptions{
-		Container: container, Follow: true, TailLines: &tail,
+		Container: container, Follow: true, TailLines: &tail, Previous: previous == "true", Timestamps: timestamps == "true", SinceSeconds: sinceSeconds,
 	})
 	if err != nil {
 		http.Error(w, "log stream setup failed", http.StatusBadGateway)

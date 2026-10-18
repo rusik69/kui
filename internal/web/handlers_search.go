@@ -4,15 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
 
-// SearchCommand is one command-palette "jump to" entry — a resource kind, a
-// built-in page, or a context switch. FullNav means a plain browser
-// navigation (context switches reload the whole shell); otherwise it's an
-// hx-get into #content exactly like a sidebar link.
+// SearchCommand is one command-palette "jump to" entry.
 type SearchCommand struct {
 	Label   string
 	URL     string
@@ -22,17 +20,133 @@ type SearchCommand struct {
 // SearchObject is one live object match from the fan-out search.
 type SearchObject struct {
 	Kind, Name, Namespace string
-	ListURL               string // the resource's list view, not a detail fragment — see handleSearch doc
+	ListURL               string
+	KindCount             int
+}
+type searchQualifier struct {
+	Kind, Namespace, Name string
+	Text                  string
 }
 
 type searchResults struct {
-	Commands []SearchCommand
-	Objects  []SearchObject
-	Error    string
+	Commands      []SearchCommand
+	Objects       []SearchObject
+	Error         string
+	Query         string
+	KindFilter    string
+	QualifierKind string
+	QualifierNS   string
+	QualifierName string
+	Count         int
+	Truncated     bool
+	InvalidQuery  bool
+	Context       string
+	Namespace     string
 }
 
 const searchObjectCap = 30
 const searchObjectPerKindCap = 5
+
+func parseSearchQuery(query string) (searchQualifier, error) {
+	var parsed searchQualifier
+	var text []string
+	isSpace := func(ch byte) bool { return ch == ' ' || ch == '\t' || ch == '\n' }
+	for i := 0; i < len(query); {
+		for i < len(query) && isSpace(query[i]) {
+			i++
+		}
+		if i == len(query) {
+			break
+		}
+		start := i
+		for i < len(query) && query[i] != ':' && !isSpace(query[i]) {
+			i++
+		}
+		if i == len(query) || query[i] != ':' {
+			i = start
+			if query[i] == '"' {
+				i++
+				var value strings.Builder
+				for i < len(query) && query[i] != '"' {
+					if query[i] == '\\' {
+						i++
+						if i == len(query) {
+							return parsed, fmt.Errorf("unfinished escape in quoted text")
+						}
+					}
+					value.WriteByte(query[i])
+					i++
+				}
+				if i == len(query) {
+					return parsed, fmt.Errorf("missing closing quote")
+				}
+				i++
+				if i < len(query) && !isSpace(query[i]) {
+					return parsed, fmt.Errorf("quoted values must be followed by a space")
+				}
+				text = append(text, value.String())
+				continue
+			}
+			for i < len(query) && !isSpace(query[i]) {
+				i++
+			}
+			text = append(text, query[start:i])
+			continue
+		}
+		key := strings.ToLower(query[start:i])
+		if key != "kind" && key != "namespace" && key != "name" {
+			i++
+			for i < len(query) && !isSpace(query[i]) {
+				i++
+			}
+			text = append(text, query[start:i])
+			continue
+		}
+		i++
+		var value string
+		if i < len(query) && query[i] == '"' {
+			i++
+			var builder strings.Builder
+			for i < len(query) && query[i] != '"' {
+				if query[i] == '\\' {
+					i++
+					if i == len(query) {
+						return parsed, fmt.Errorf("unfinished escape in %s value", key)
+					}
+				}
+				builder.WriteByte(query[i])
+				i++
+			}
+			if i == len(query) {
+				return parsed, fmt.Errorf("missing closing quote for %s", key)
+			}
+			i++
+			if i < len(query) && !isSpace(query[i]) {
+				return parsed, fmt.Errorf("quoted %s value must be followed by a space", key)
+			}
+			value = builder.String()
+		} else {
+			valueStart := i
+			for i < len(query) && !isSpace(query[i]) {
+				i++
+			}
+			value = query[valueStart:i]
+		}
+		if strings.TrimSpace(value) == "" {
+			return parsed, fmt.Errorf("%s: needs a non-empty value", key)
+		}
+		switch key {
+		case "kind":
+			parsed.Kind = value
+		case "namespace":
+			parsed.Namespace = value
+		case "name":
+			parsed.Name = value
+		}
+	}
+	parsed.Text = strings.Join(text, " ")
+	return parsed, nil
+}
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctxName := r.PathValue("ctx")
@@ -41,22 +155,36 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		ns = "_all"
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	results := searchResults{Query: q, Context: ctxName, Namespace: ns, KindFilter: r.URL.Query().Get("kindFilter")}
 	if q == "" {
-		fmt.Fprint(w, `<div class="empty-state" role="status">Type to search&hellip;</div>`)
+		returned := searchResults{Query: "", Context: ctxName, Namespace: ns}
+		s.render(w, "searchresults", returned)
 		return
 	}
-	needle := strings.ToLower(q)
-
-	results := searchResults{Commands: s.searchCommands(ctxName, ns, needle)}
-
+	qualifiers, err := parseSearchQuery(q)
+	if err != nil {
+		results.InvalidQuery = true
+		results.Error = "Search syntax: " + err.Error()
+		s.render(w, "searchresults", results)
+		return
+	}
+	results.QualifierKind, results.QualifierNS, results.QualifierName = qualifiers.Kind, qualifiers.Namespace, qualifiers.Name
+	needle := strings.ToLower(qualifiers.Text)
+	results.Commands = s.searchCommands(ctxName, ns, needle)
+	if qualifiers.Kind != "" || qualifiers.Namespace != "" || qualifiers.Name != "" {
+		results.Commands = nil
+	}
 	c, err := s.clients(ctxName)
 	if err != nil {
-		results.Error = "Object search unavailable: " + err.Error()
+		results.Error = "Object search unavailable. Check the selected context and reconnect, then retry."
 	} else {
 		fanCtx, cancel := context.WithTimeout(r.Context(), fanOutTimeout)
 		defer cancel()
 		fanout := k8s.FanOutList(fanCtx, c, ns)
-		results.Objects = searchObjects(fanout, ctxName, needle)
+		var found int
+		results.Objects, found = searchObjectsFiltered(fanout, ctxName, qualifiers)
+		results.Count = found
+		results.Truncated = found > len(results.Objects)
 		failures := make([]string, 0, len(fanout))
 		successes := 0
 		for _, result := range fanout {
@@ -71,25 +199,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			if successes == 0 {
 				prefix = "Object search unavailable; failed resource kinds: "
 			}
-			results.Error = prefix + strings.Join(failures, ", ")
+			results.Error = prefix + strings.Join(failures, ", ") + ". Retry the search or narrow it with kind:."
 		}
 	}
-
 	s.render(w, "searchresults", results)
 }
 
 func (s *Server) searchCommands(ctxName, ns, needle string) []SearchCommand {
 	var out []SearchCommand
-	add := func(label, url string, fullNav bool) {
+	add := func(label, path string, fullNav bool) {
 		if strings.Contains(strings.ToLower(label), needle) {
-			out = append(out, SearchCommand{Label: label, URL: url, FullNav: fullNav})
+			out = append(out, SearchCommand{Label: label, URL: path, FullNav: fullNav})
 		}
 	}
-
-	add("Overview", "/c/"+ctxName+"/"+ns+"/overview", false)
-	add("All resources", "/c/"+ctxName+"/"+ns+"/all", false)
+	pathPrefix := "/c/" + url.PathEscape(ctxName) + "/" + url.PathEscape(ns)
+	add("Overview", pathPrefix+"/overview", false)
+	add("All resources", pathPrefix+"/all", false)
 	for _, rk := range k8s.Registry {
-		add("Go to "+rk.Kind, "/c/"+ctxName+"/"+ns+"/"+rk.Name, false)
+		add("Go to "+rk.Kind, pathPrefix+"/"+rk.Name, false)
 	}
 	if contexts, err := s.mgr.ListContexts(); err == nil {
 		for _, rc := range contexts {
@@ -99,35 +226,41 @@ func (s *Server) searchCommands(ctxName, ns, needle string) []SearchCommand {
 	return out
 }
 
-// searchObjects substring-matches object names (case-insensitive) across
-// every kind FanOutList returned. Navigates to the resource's list view
-// (same URL a sidebar link uses), not a detail fragment: handleResourceDetail
-// renders markup meant for #detail-pane, and hitting it as a #content swap
-// would break the list/detail split-pane layout entirely.
 func searchObjects(results []k8s.KindResult, ctxName, needle string) []SearchObject {
+	parsed := searchQualifier{Text: needle}
+	objects, _ := searchObjectsFiltered(results, ctxName, parsed)
+	return objects
+}
+
+func searchObjectsFiltered(results []k8s.KindResult, ctxName string, query searchQualifier) ([]SearchObject, int) {
 	var out []SearchObject
+	count := 0
+	kindCounts := make(map[string]int)
+	matches := func(value, filter string) bool {
+		return filter == "" || strings.Contains(strings.ToLower(value), strings.ToLower(filter))
+	}
 	for _, res := range results {
-		if res.Err != nil {
+		if res.Err != nil || !matches(res.Kind.Kind, query.Kind) && !matches(res.Kind.Name, query.Kind) {
 			continue
 		}
 		perKind := 0
 		for i := range res.List.Items {
-			if len(out) >= searchObjectCap {
-				return out
-			}
-			if perKind >= searchObjectPerKindCap {
-				break
-			}
 			obj := &res.List.Items[i]
-			if !strings.Contains(strings.ToLower(obj.GetName()), needle) {
+			if !matches(obj.GetName(), query.Name) || !matches(obj.GetNamespace(), query.Namespace) || !matches(obj.GetName(), query.Text) {
 				continue
 			}
-			out = append(out, SearchObject{
-				Kind: res.Kind.Kind, Name: obj.GetName(), Namespace: obj.GetNamespace(),
-				ListURL: "/c/" + ctxName + "/" + nsOrDash(obj.GetNamespace()) + "/" + res.Kind.Name,
-			})
+			count++
+			kindCounts[res.Kind.Kind]++
 			perKind++
+			if perKind > searchObjectPerKindCap || len(out) >= searchObjectCap {
+				continue
+			}
+			listURL := "/c/" + url.PathEscape(ctxName) + "/" + url.PathEscape(nsOrDash(obj.GetNamespace())) + "/" + res.Kind.Name
+			out = append(out, SearchObject{Kind: res.Kind.Kind, Name: obj.GetName(), Namespace: obj.GetNamespace(), ListURL: listURL})
 		}
 	}
-	return out
+	for i := range out {
+		out[i].KindCount = kindCounts[out[i].Kind]
+	}
+	return out, count
 }

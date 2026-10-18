@@ -24,8 +24,21 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install UI test dependencies
+        run: npm ci
+
+      - name: Install Chromium and browser dependencies
+        run: npx playwright install --with-deps chromium
+
       - name: ci
         run: make ci
+      - name: ui tests
+        run: make test-ui
       - name: Summarize package coverage
         if: always()
         run: |

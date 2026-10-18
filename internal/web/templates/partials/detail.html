@@ -26,6 +26,25 @@
 <div class="detail-body">
 
   <div id="tab-details" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-details" tabindex="0">
+    {{if .IsDeployment}}
+    <section class="deployment-workbench" data-status-url="/c/{{.Context}}/{{.Namespace}}/deployments/{{.Name}}/status" data-scale-url="/c/{{.Context}}/{{.Namespace}}/deployments/{{.Name}}/scale" data-action-url="/c/{{.Context}}/{{.Namespace}}/deployments/{{.Name}}/action">
+      <div class="section-title">Deployment rollout</div>
+      <p id="deployment-replicas-status" role="status">Loading desired/current/available replicas…</p>
+      <div id="deployment-conditions" aria-live="polite"></div>
+      <form id="deployment-scale-form">
+        <label>Desired replicas <input id="deployment-replicas" type="number" min="0" max="100000" step="1" required></label>
+        <button class="btn btn-primary" type="submit">Scale</button>
+      </form>
+      <div class="table-selectors">
+        <button class="btn" type="button" data-workload-action="restart">Restart rollout</button>
+        <button class="btn" type="button" data-workload-action="pause">Pause rollout</button>
+        <button class="btn" type="button" data-workload-action="resume">Resume rollout</button>
+        <label>Rollback revision <select id="deployment-revision"><option value="">Choose an available revision</option></select></label>
+        <button class="btn" type="button" data-workload-action="rollback">Rollback</button>
+      </div>
+      <p id="deployment-operation-status" role="status" aria-live="polite"></p>
+    </section>
+    {{end}}
     <label class="detail-search">Search details <input type="search" oninput="kui.searchDetail(this.value)" aria-label="Search within details"></label>
     <div class="section-title">Metadata</div>
     <dl class="kv-grid">
@@ -136,14 +155,25 @@
     <div class="stream-controls">
       <label>Container <select id="log-container" aria-label="Log container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
       <label>Initial lines <input id="log-tail-lines" type="number" min="1" max="5000" value="500" aria-label="Initial log lines"></label>
+      <label>Tail preset <select id="log-tail-preset"><option value="">Custom</option><option value="100">Short (100)</option><option value="500">Standard (500)</option><option value="1000">Long (1000)</option><option value="5000">Maximum (5000)</option></select></label>
+      <label><input type="checkbox" id="logs-previous"> Previous container instance</label>
+      <label><input type="checkbox" id="logs-timestamps"> Timestamps</label>
+      <label>Since <select id="logs-since"><option value="">Any time</option><option value="3600">1 hour</option><option value="21600">6 hours</option><option value="86400">24 hours</option><option value="604800">7 days</option></select></label>
+      <label><input type="checkbox" id="logs-wrap"> Wrap lines</label>
+      <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Connect logs</button>
       <button id="log-reconnect" class="btn" onclick="kui.reconnectLogs()" disabled>Reconnect</button>
+      <button type="button" id="log-retry-cancel" class="btn" onclick="kui.cancelLogReconnect()" hidden>Cancel retry</button>
       <button id="log-pause" class="btn" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
       <button class="btn" onclick="kui.jumpToLatest()">Latest</button>
-      <button class="btn" onclick="kui.downloadLogs()">Download buffer</button>
+      <button class="btn" onclick="kui.copyFilteredLogs()">Copy filtered</button>
+      <button class="btn" onclick="kui.downloadLogs()">Download raw</button>
+      <button class="btn" onclick="kui.downloadFilteredLogs()">Download filtered</button>
       <button class="btn" onclick="kui.clearLogs()">Clear</button>
       <span id="log-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
+      <span id="log-mode" class="text-dim" role="status"></span>
     </div>
     <label class="log-filter">Filter logs <input id="log-filter" type="search" oninput="kui.filterLogs()"></label>
+    <label><input id="logs-regex" type="checkbox" onchange="kui.filterLogs()"> Regular expression</label>
     <label><input id="log-case-sensitive" type="checkbox" onchange="kui.filterLogs()"> Case-sensitive</label>
     <label><input id="log-follow" type="checkbox" checked onchange="kui.toggleFollow(this.checked)"> Follow logs</label>
     <span id="log-buffer-status" class="text-dim" aria-live="off"></span>

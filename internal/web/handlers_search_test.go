@@ -1,11 +1,12 @@
 package web
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
@@ -89,6 +90,66 @@ func TestSearchCommands(t *testing.T) {
 	switchCmds := s.searchCommands("ctxid", "_all", "switch to prod")
 	if len(switchCmds) != 1 || switchCmds[0].Label != "Switch to prod" || !switchCmds[0].FullNav {
 		t.Errorf("expected exactly one \"Switch to prod\" full-nav command, got %+v", switchCmds)
+	}
+}
+func TestParseSearchQueryQualifiersAndFreeText(t *testing.T) {
+	got, err := parseSearchQuery(`kind:"Pod" namespace:"team a" name:web frontend`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "Pod" || got.Namespace != "team a" || got.Name != "web" || got.Text != "frontend" {
+		t.Fatalf("unexpected parsed search query: %+v", got)
+	}
+}
+
+func TestParseSearchQueryRejectsMalformedQualifiers(t *testing.T) {
+	for _, query := range []string{`kind:`, `name:"unterminated`, `namespace:"team"x`, `kind:"   "`} {
+		if _, err := parseSearchQuery(query); err == nil {
+			t.Errorf("parseSearchQuery(%q) accepted malformed qualifier", query)
+		}
+	}
+}
+
+func TestSearchObjectsFiltersAndCountsBeyondCaps(t *testing.T) {
+	podsRK, _ := k8s.ByName("pods")
+	results := []k8s.KindResult{{
+		Kind: podsRK,
+		List: &unstructured.UnstructuredList{Items: []unstructured.Unstructured{
+			namedObject("Pod", "web-one", "team a"),
+			namedObject("Pod", "web-two", "team a"),
+			namedObject("Pod", "web-other", "default"),
+		}},
+	}}
+	got, count := searchObjectsFiltered(results, "myctx", searchQualifier{Kind: "pod", Namespace: "team a", Name: "web"})
+	if count != 2 || len(got) != 2 {
+		t.Fatalf("qualified search returned %d results, count %d; want 2", len(got), count)
+	}
+	if got[0].ListURL != "/c/myctx/team%20a/pods" {
+		t.Fatalf("result destination lost namespace scope or safe path escaping: %q", got[0].ListURL)
+	}
+}
+
+func TestSearchEmptyAndPartialStatesHaveRecoveryText(t *testing.T) {
+	server, err := New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := httptest.NewRecorder()
+	server.render(empty, "searchresults", searchResults{})
+	if !strings.Contains(empty.Body.String(), "Type a name or qualifier") || !strings.Contains(empty.Body.String(), "Shortcuts") {
+		t.Fatalf("empty search state lacks search guidance: %s", empty.Body.String())
+	}
+	partialResults := searchResults{Query: `kind:Pod name:"web app"`, KindFilter: "Pod", Context: "prod", Namespace: "team-a", Error: "Some resource kinds could not be searched: Pods. Retry the search or narrow it with kind:."}
+	partialRecorder := httptest.NewRecorder()
+	server.render(partialRecorder, "searchresults", partialResults)
+	body := partialRecorder.Body.String()
+	if !strings.Contains(body, "Retry the search") || !strings.Contains(body, `data-search-query="kind:Pod name:&#34;web app&#34;"`) || !strings.Contains(body, `data-kind-filter="Pod"`) {
+		t.Fatalf("partial search state lacks recovery or navigation state: %s", body)
+	}
+	invalidRecorder := httptest.NewRecorder()
+	server.render(invalidRecorder, "searchresults", searchResults{Query: "kind:", InvalidQuery: true, Error: "Search syntax: kind: needs a non-empty value"})
+	if !strings.Contains(invalidRecorder.Body.String(), "Search syntax") || !strings.Contains(invalidRecorder.Body.String(), `kind:Pod`) {
+		t.Fatalf("malformed query does not explain its syntax recovery: %s", invalidRecorder.Body.String())
 	}
 }
 

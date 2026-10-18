@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"sync"
@@ -116,12 +115,14 @@ func (s *Server) handleDebugShell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	podName := fmt.Sprintf("kui-debug-%d", rand.IntN(1_000_000))
-	pod := k8s.DebugPodShellSpec(podName, ns, s.debugImage)
-	if _, err := c.Clientset.CoreV1().Pods(ns).Create(r.Context(), pod, metav1.CreateOptions{}); err != nil {
+	pod := k8s.DebugPodShellSpec("", ns, s.debugImage)
+	pod.GenerateName = "kui-debug-"
+	created, err := c.Clientset.CoreV1().Pods(ns).Create(r.Context(), pod, metav1.CreateOptions{})
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	podName := created.Name
 
 	if err := waitForDebugPod(r.Context(), func(ctx context.Context) (*corev1.Pod, error) {
 		return c.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
@@ -155,7 +156,11 @@ func waitForDebugPod(ctx context.Context, get func(context.Context) (*corev1.Pod
 	for {
 		pod, err := get(ctx)
 		if err == nil && pod.Status.Phase == corev1.PodRunning {
-			return nil
+			for _, status := range pod.Status.ContainerStatuses {
+				if status.Name == "shell" && status.Ready {
+					return nil
+				}
+			}
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			return err
@@ -191,14 +196,15 @@ func (s *Server) handleDebugShellKill(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePortForwardStart(w http.ResponseWriter, r *http.Request) {
 	ctxName, ns, name := r.PathValue("ctx"), r.PathValue("ns"), r.PathValue("name")
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	localPort, err1 := strconv.Atoi(r.FormValue("localPort"))
 	remotePort, err2 := strconv.Atoi(r.FormValue("remotePort"))
-	if err1 != nil || err2 != nil {
-		http.Error(w, "invalid port", http.StatusBadRequest)
+	if err1 != nil || err2 != nil || localPort < 1 || localPort > 65535 || remotePort < 1 || remotePort > 65535 {
+		http.Error(w, "ports must be between 1 and 65535", http.StatusBadRequest)
 		return
 	}
 	c, err := s.clients(ctxName)
@@ -210,6 +216,7 @@ func (s *Server) handlePortForwardStart(w http.ResponseWriter, r *http.Request) 
 	handle, err := s.forwards.Start(c, ns, name, localPort, remotePort, discardWriter{}, discardWriter{})
 	if err != nil {
 		triggerToast(w, "error", err.Error())
+		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, `<span class="error-state">%s</span>`, template.HTMLEscapeString(err.Error()))
 		return
 	}
@@ -242,10 +249,8 @@ type rowUsage struct {
 }
 
 // writeMetricsScript renders the aggregate strip plus a per-row patch script
-// consumed by app.js's kui.applyMetrics. Per-row data is only ever injected
-// as machine-generated k8s resource names/numbers (DNS-1123 constrained, so
-// it can't contain "<"/">"/"/" to break out of the <script> tag) — safe to
-// embed directly without html/template's JS-context escaping machinery.
+// consumed by app.js's kui.applyMetrics. encoding/json escapes HTML-sensitive
+// characters in the JSON payload so names cannot terminate the script element.
 func writeMetricsScript(w http.ResponseWriter, totalCPU, totalMem int64, byKey map[string]rowUsage) {
 	fmt.Fprintf(w, `<div class="toolbar" style="border:none"><span>&Sigma; CPU: %dm</span><span>&Sigma; Mem: %dMi</span></div>`, totalCPU, totalMem)
 	payload, err := json.Marshal(byKey)
@@ -268,7 +273,11 @@ func (s *Server) handleMetricsPods(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pod metrics request failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if !ok || list == nil || len(list.Items) == 0 {
+	if !ok {
+		http.Error(w, "pod metrics unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if list == nil || len(list.Items) == 0 {
 		return
 	}
 	totalCPU, totalMem := int64(0), int64(0)
@@ -299,7 +308,11 @@ func (s *Server) handleMetricsNodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "node metrics request failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	if !ok || list == nil || len(list.Items) == 0 {
+	if !ok {
+		http.Error(w, "node metrics unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if list == nil || len(list.Items) == 0 {
 		return
 	}
 	totalCPU, totalMem := int64(0), int64(0)

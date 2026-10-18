@@ -79,10 +79,7 @@ func resolveKind(c *k8s.Clients, name string) (k8s.ResourceKind, bool) {
 	if rk, ok := k8s.ByName(name); ok {
 		return rk, true
 	}
-	all, err := k8s.AllAPIResources(c)
-	if err != nil {
-		return k8s.ResourceKind{}, false
-	}
+	all, _ := k8s.AllAPIResources(c)
 	for _, rk := range all {
 		if rk.Name == name {
 			return rk, true
@@ -251,16 +248,21 @@ func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.Reso
 		FieldSelector:     options.FieldSelector,
 		PageSize:          options.Limit,
 		NextContinue:      list.GetContinue(),
+		ResourceVersion:   list.GetResourceVersion(),
 	}, nil
 }
 
 func (s *Server) renderAllResourcesDirectory(w http.ResponseWriter, r *http.Request, ctxName, ns string, c *k8s.Clients) {
 	kinds, err := k8s.AllAPIResources(c)
-	if err != nil {
+	if err != nil && len(kinds) == 0 {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	table := TableData{Kind: "All resources", Columns: []string{"Kind", "Namespaced"}, HeaderColumnCount: 2, RowsAreKinds: true}
+	warning := ""
+	if err != nil {
+		warning = "Some resource types are unavailable because discovery was incomplete: " + err.Error()
+	}
+	table := TableData{Kind: "All resources", Columns: []string{"Kind", "Namespaced"}, HeaderColumnCount: 2, RowsAreKinds: true, DiscoveryWarning: warning}
 	for _, rk := range kinds {
 		table.Rows = append(table.Rows, Row{
 			Name:      rk.Kind,

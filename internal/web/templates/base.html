@@ -103,14 +103,18 @@
 {{end}}
 <div class="bulk-bar" id="bulk-bar" style="display:none" role="status" aria-live="polite">
   <span id="bulk-count"></span>
+  <button class="btn" onclick="kui.copySelectedNames()">Copy names</button>
+  <button class="btn" onclick="kui.selectAllPage()">Select all rows on page</button>
+  <button class="btn" onclick="kui.clearSelection()">Clear selection</button>
   <button class="btn btn-danger" onclick="kui.bulkDelete()">Delete selected</button>
-  <button class="btn" onclick="kui.clearSelection()">Clear</button>
-    </div>
+</div>
 <div class="content-row">
-  <div class="list-pane" id="list-pane"
-       hx-ext="sse" sse-connect="{{.WatchURL}}"
-       hx-get="{{.ListURL}}" hx-trigger="load, sse:message" hx-swap="innerHTML"
-       data-list-url="{{.ListURL}}" data-bulk-delete-url="{{.BulkDeleteURL}}">
+  <div class="watch-source" id="watch-source" hx-ext="sse" sse-connect="{{.WatchURL}}">
+    <span id="watch-error-event" hidden sse-swap="watch-error"></span>
+    <div class="list-pane" id="list-pane"
+         hx-get="{{.ListURL}}" hx-trigger="load, sse:message" hx-swap="innerHTML"
+         data-list-url="{{.ListURL}}" data-bulk-delete-url="{{.BulkDeleteURL}}">
+    </div>
   </div>
   <div class="detail-splitter" id="detail-splitter" style="display:none" role="separator" aria-label="Resize detail pane" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900" aria-valuenow="420" tabindex="0"></div>
   <div class="detail-pane" id="detail-pane"></div>

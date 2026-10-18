@@ -85,37 +85,60 @@ func InGroup(group string) []ResourceKind {
 }
 
 // AllAPIResources walks cluster discovery for the "All resources" page —
-// anything the registry doesn't already cover, including CRDs.
+// anything the registry doesn't already cover, including CRDs. Partial discovery
+// results are returned together with the discovery error.
 func AllAPIResources(c *Clients) ([]ResourceKind, error) {
-	lists, err := c.Discovery.ServerPreferredResources()
-	if err != nil && len(lists) == 0 {
-		return nil, fmt.Errorf("discover resources: %w", err)
+	lists, discoveryErr := c.Discovery.ServerPreferredResources()
+	if discoveryErr != nil && len(lists) == 0 {
+		return nil, fmt.Errorf("discover resources: %w", discoveryErr)
 	}
-	var out []ResourceKind
+	type resourceIdentity struct {
+		group    string
+		resource string
+	}
+	byIdentity := make(map[resourceIdentity]ResourceKind)
 	for _, l := range lists {
 		gv, err := schema.ParseGroupVersion(l.GroupVersion)
 		if err != nil {
 			continue
 		}
 		for _, r := range l.APIResources {
-			if !canListAndWatch(r.Verbs) || strings.Contains(r.Name, "/") {
+			if !canBrowse(r.Verbs) || strings.Contains(r.Name, "/") || r.Kind == "" {
 				continue
 			}
-			out = append(out, ResourceKind{
-				Name:       r.Name,
-				Group:      "All resources",
-				Kind:       r.Kind,
-				GVR:        gv.WithResource(r.Name),
-				Namespaced: r.Namespaced,
-			})
+			identity := resourceIdentity{group: gv.Group, resource: r.Name}
+			kind := ResourceKind{
+				Name: r.Name, Group: "All resources", Kind: r.Kind,
+				GVR: gv.WithResource(r.Name), Namespaced: r.Namespaced,
+			}
+			current, ok := byIdentity[identity]
+			if !ok || kind.GVR.Version < current.GVR.Version ||
+				(kind.GVR.Version == current.GVR.Version && kind.Kind < current.Kind) {
+				byIdentity[identity] = kind
+			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
+	out := make([]ResourceKind, 0, len(byIdentity))
+	for identity, kind := range byIdentity {
+		if identity.group != "" {
+			kind.Name = identity.resource + "." + identity.group
+		}
+		out = append(out, kind)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		if out[i].GVR.Group != out[j].GVR.Group {
+			return out[i].GVR.Group < out[j].GVR.Group
+		}
+		return out[i].GVR.Version < out[j].GVR.Version
+	})
+	return out, discoveryErr
 }
 
-func canListAndWatch(verbs metav1.Verbs) bool {
-	return slices.Contains(verbs, "list") && slices.Contains(verbs, "watch")
+func canBrowse(verbs metav1.Verbs) bool {
+	return slices.Contains(verbs, "get") && slices.Contains(verbs, "list") && slices.Contains(verbs, "watch")
 }
 
 // List returns every object of the given kind, scoped to namespace unless

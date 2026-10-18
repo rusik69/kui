@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 
 	"k8s.io/client-go/tools/portforward"
@@ -21,6 +22,22 @@ type ForwardHandle struct {
 	stopCh     chan struct{}
 	readyCh    chan struct{}
 	errCh      chan error // receives exactly one value: ForwardPorts' result
+	errMu      sync.RWMutex
+	termErr    error
+}
+
+// setTerminationError stores the terminal result from ForwardPorts.
+func (h *ForwardHandle) setTerminationError(err error) {
+	h.errMu.Lock()
+	h.termErr = err
+	h.errMu.Unlock()
+}
+
+// TerminationError returns the result reported when the forward stopped.
+func (h *ForwardHandle) TerminationError() error {
+	h.errMu.RLock()
+	defer h.errMu.RUnlock()
+	return h.termErr
 }
 
 // ForwardManager owns all active port-forward sessions for a process.
@@ -28,6 +45,15 @@ type ForwardManager struct {
 	mu   sync.Mutex
 	next int
 	live map[string]*ForwardHandle
+}
+
+// ForwardSnapshot is a stable value snapshot of one active forward.
+type ForwardSnapshot struct {
+	ID         string
+	Namespace  string
+	Pod        string
+	LocalPort  int
+	RemotePort int
 }
 
 // NewForwardManager creates an empty manager.
@@ -64,30 +90,64 @@ func (m *ForwardManager) Start(c *Clients, namespace, pod string, localPort, rem
 		return nil, err
 	}
 
-	go func() { h.errCh <- fw.ForwardPorts() }()
+	go func() {
+		err := fw.ForwardPorts()
+		h.setTerminationError(err)
+		h.errCh <- err
+	}()
 
 	select {
 	case <-h.readyCh:
 	case err := <-h.errCh:
-		// The tunnel died before it was ever ready (pod unreachable, API
-		// rejected the request, ...). ForwardPorts may report that as a nil
-		// error, which must not be read as "all is well".
 		if err == nil {
 			err = errors.New("port-forward tunnel ended before becoming ready")
 		}
 		return nil, err
+	}
+	if localPort == 0 {
+		ports, err := fw.GetPorts()
+		if err != nil {
+			close(h.stopCh)
+			return nil, err
+		}
+		h.LocalPort, err = resolvedLocalPort(localPort, ports)
+		if err != nil {
+			close(h.stopCh)
+			return nil, err
+		}
 	}
 
 	m.mu.Lock()
 	m.live[id] = h
 	m.mu.Unlock()
 
-	// Reap the handle if the forwarder dies on its own (the pod restarts, the
-	// API connection drops, ...). Without this a dead tunnel stays in the
-	// live map forever, and its Stop button keeps claiming a forward exists.
 	go m.reapOnDeath(h)
-
 	return h, nil
+}
+
+func resolvedLocalPort(requested int, ports []portforward.ForwardedPort) (int, error) {
+	if requested != 0 {
+		return requested, nil
+	}
+	if len(ports) == 0 {
+		return 0, errors.New("port-forward tunnel did not report its allocated local port")
+	}
+	return int(ports[0].Local), nil
+}
+
+// Active returns a consistent, ID-ordered snapshot of active forwards.
+func (m *ForwardManager) Active() []ForwardSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	active := make([]ForwardSnapshot, 0, len(m.live))
+	for _, handle := range m.live {
+		active = append(active, ForwardSnapshot{
+			ID: handle.ID, Namespace: handle.Namespace, Pod: handle.Pod,
+			LocalPort: handle.LocalPort, RemotePort: handle.RemotePort,
+		})
+	}
+	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
+	return active
 }
 
 // reapOnDeath removes the handle from the live set once ForwardPorts returns,

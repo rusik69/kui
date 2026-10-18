@@ -1,6 +1,6 @@
 {{define "history"}}
-<table class="resource-table">
-  <thead><tr><th>Revision</th><th>ReplicaSet</th><th>Image</th><th>Replicas</th><th>Age</th></tr></thead>
+<table class="resource-table history-table">
+  <thead><tr><th tabindex="0" role="button" aria-sort="none" onclick="kui.sortHistory(this)">Revision</th><th tabindex="0" role="button" aria-sort="none" onclick="kui.sortHistory(this)">ReplicaSet</th><th tabindex="0" role="button" aria-sort="none" onclick="kui.sortHistory(this)">Image</th><th tabindex="0" role="button" aria-sort="none" onclick="kui.sortHistory(this)">Replicas</th><th tabindex="0" role="button" aria-sort="none" onclick="kui.sortHistory(this)">Age</th></tr></thead>
   <tbody>
     {{if not .}}<tr><td colspan="5" class="empty-state">No history found</td></tr>{{end}}
     {{range .}}<tr>

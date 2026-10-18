@@ -33,8 +33,9 @@ type TableData struct {
 	Kind              string
 	Columns           []string
 	Rows              []Row
-	ShowNamespace     bool
+	DiscoveryWarning  string // partial API discovery warning for the "All resources" table
 	HeaderColumnCount int
+	ShowNamespace     bool
 	MetricsURL        string // set for pods/nodes when metrics-server may be available
 	RowsAreKinds      bool   // true for the "All resources" directory: rows navigate like sidebar links, not detail rows
 	Selectable        bool   // true when rows support bulk-select checkboxes (namespaced/cluster objects, not the kinds directory)
@@ -42,6 +43,7 @@ type TableData struct {
 	LabelSelector     string
 	FieldSelector     string
 	PageSize          int64
+	ResourceVersion   string
 	NextContinue      string
 	NextPageURL       string
 }

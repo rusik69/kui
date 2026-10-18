@@ -1,5 +1,5 @@
 {{define "detail"}}
-<div class="detail-header">
+<div class="detail-header" data-pod-identity="{{.Namespace}}/{{.Name}}">
   <div class="detail-header-row">
     <div>{{if .DotClass}}<span class="dot {{.DotClass}}"></span>{{end}}<strong>{{.Name}}</strong></div>
     <div class="icon-actions">
@@ -26,14 +26,16 @@
 <div class="detail-body">
 
   <div id="tab-details" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-details" tabindex="0">
+    <label class="detail-search">Search details <input type="search" oninput="kui.searchDetail(this.value)" aria-label="Search within details"></label>
     <div class="section-title">Metadata</div>
     <dl class="kv-grid">
-      <dt>Name</dt><dd>{{.Name}}</dd>
-      <dt>Namespace</dt><dd>{{.Namespace}}</dd>
-      <dt>Age</dt><dd>{{.Age}}</dd>
+      <dt>Name</dt><dd>{{.Name}} <button type="button" class="copy-action" data-copy-text="{{.Name}}" aria-label="Copy name" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
+      <dt>Namespace</dt><dd>{{.Namespace}} <button type="button" class="copy-action" data-copy-text="{{.Namespace}}" aria-label="Copy namespace" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
+      <dt>Age</dt><dd>{{.Age}} <button type="button" class="copy-action" data-copy-text="{{.Age}}" aria-label="Copy age" onclick="kui.copyText(this.dataset.copyText)"></button></dd>
       <dt>Labels</dt><dd><div class="pill-row">{{range $k,$v := .Labels}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
       <dt>Annotations</dt><dd><div class="pill-row">{{range $k,$v := .Annotations}}<span class="pill" title="{{$k}}={{$v}}">{{$k}}<span class="pill-eq">=</span>{{$v}}</span>{{end}}</div></dd>
     </dl>
+    <button type="button" class="btn" onclick="kui.hideAllSecrets()">Hide all secret values</button>
 
     {{if .Conditions}}
     <div class="section-title">Conditions</div>
@@ -80,7 +82,7 @@
       <thead><tr><th>Name</th><th>Namespace</th><th>Status</th></tr></thead>
       <tbody>
         {{if not .PodsOnNode}}<tr><td colspan="3" class="empty-state">No pods</td></tr>{{end}}
-        {{range .PodsOnNode}}<tr hx-get="{{.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"><td>{{.Name}}</td><td>{{.Namespace}}</td><td>{{.Status}}</td></tr>{{end}}
+        {{range .PodsOnNode}}<tr class="related-pod-row" tabindex="0" data-id="{{.DetailURL}}" hx-get="{{.DetailURL}}" hx-target="#detail-pane" hx-swap="innerHTML"><td>{{.Name}}</td><td>{{.Namespace}}</td><td>{{.Status}}</td></tr>{{end}}
       </tbody>
     </table>
     {{end}}
@@ -115,6 +117,7 @@
   </div>
 
   <div id="tab-events" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-events" tabindex="0" style="display:none" hidden>
+    <label class="detail-search">Filter events <input type="search" oninput="kui.filterEvents(this.value)" aria-label="Filter events"></label>
     <table class="resource-table">
       <thead><tr><th>Type</th><th>Reason</th><th>Age</th><th>Message</th></tr></thead>
       <tbody>
@@ -129,12 +132,17 @@
     <div class="stream-controls">
       <label>Container <select id="log-container" aria-label="Log container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
       <label>Initial lines <input id="log-tail-lines" type="number" min="1" max="5000" value="500" aria-label="Initial log lines"></label>
-      <button class="btn" onclick="kui.startLogs('{{.LogsWSURLBase}}')">Tail</button>
+      <button id="log-reconnect" class="btn" onclick="kui.reconnectLogs()" disabled>Reconnect</button>
       <button id="log-pause" class="btn" onclick="kui.toggleLogs()" disabled aria-pressed="false">Pause</button>
+      <button class="btn" onclick="kui.jumpToLatest()">Latest</button>
+      <button class="btn" onclick="kui.downloadLogs()">Download buffer</button>
       <button class="btn" onclick="kui.clearLogs()">Clear</button>
       <span id="log-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
     </div>
     <label class="log-filter">Filter logs <input id="log-filter" type="search" oninput="kui.filterLogs()"></label>
+    <label><input id="log-case-sensitive" type="checkbox" onchange="kui.filterLogs()"> Case-sensitive</label>
+    <label><input id="log-follow" type="checkbox" checked onchange="kui.toggleFollow(this.checked)"> Follow logs</label>
+    <span id="log-buffer-status" class="text-dim" aria-live="off"></span>
     <div id="logs-pane" class="log-pane" role="log" aria-live="off"></div>
   </div>
 
@@ -142,6 +150,7 @@
     <div class="stream-controls">
       <label>Container <select id="shell-container" aria-label="Shell container">{{range .ContainerNames}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
       <button class="btn" onclick="kui.startShell('{{.ExecWSURLBase}}')">Connect</button>
+      <button id="shell-reconnect" class="btn" onclick="kui.reconnectShell()" disabled>Reconnect</button>
       <button class="btn" onclick="kui.copyTerminalSelection()">Copy selection</button>
       <button class="btn" onclick="kui.clearTerminal()">Clear terminal</button>
       <span id="shell-status" class="stream-status" role="status" aria-live="polite">Disconnected</span>
@@ -152,6 +161,7 @@
   <div id="tab-forward" class="detail-tab-panel" role="tabpanel" aria-labelledby="tab-button-forward" tabindex="0" style="display:none" hidden>
     <form hx-post="{{.PortForwardURL}}" hx-target="#forward-result" hx-swap="innerHTML">
       <label>Local port <input type="number" name="localPort" required></label>
+      <label><input type="checkbox" onchange="kui.samePort(this)"> Same port</label>
       <label>Remote port <input type="number" name="remotePort" required value="{{.DefaultRemotePort}}"></label>
       <button class="btn btn-primary" type="submit">Start</button>
     </form>

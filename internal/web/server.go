@@ -2,13 +2,13 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"fmt"
-	"github.com/rusik69/kui/internal/k8s"
 	"html/template"
 	"io"
 	"io/fs"
@@ -17,8 +17,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+
+	"github.com/rusik69/kui/internal/k8s"
 )
 
 //go:embed templates
@@ -26,6 +29,8 @@ var templateFS embed.FS
 
 //go:embed static
 var staticFS embed.FS
+
+var templateBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 // Server holds the shared state for every HTTP handler.
 type Server struct {
@@ -296,9 +301,18 @@ func (s *Server) routes() {
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {
-	if err := s.tmpl.ExecuteTemplate(w, name, data); err != nil {
+	buf := templateBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer func() {
+		if buf.Cap() <= 1<<20 {
+			templateBufferPool.Put(buf)
+		}
+	}()
+	if err := s.tmpl.ExecuteTemplate(buf, name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	_, _ = buf.WriteTo(w)
 }
 func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
 	contexts, err := s.mgr.ListContexts()

@@ -9,7 +9,7 @@ run:
 	go run ./cmd/kui
 
 test:
-	go test ./... -race -cover
+	go test ./... -race -coverprofile=coverage.out -covermode=atomic
 
 vet:
 	go vet ./...

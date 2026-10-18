@@ -13,7 +13,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	c, err := s.clients(ctxName)
 	if err != nil {
-		fmt.Fprint(w, "Unreachable")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		http.Error(w, "Unreachable", http.StatusBadGateway)
 		return
 	}
 	// ResourceVersion "0": this endpoint polls every 3s, so the list is
@@ -21,9 +22,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	// than reading etcd each time — right for a status indicator.
 	pods, err := c.Clientset.CoreV1().Pods(nsOrAll(ns)).List(r.Context(), metav1.ListOptions{ResourceVersion: "0"})
 	if err != nil {
-		fmt.Fprint(w, "Unreachable")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		http.Error(w, "Unreachable", http.StatusBadGateway)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	tally := tallyPodPhases(pods.Items)
 	fmt.Fprintf(w, "Live &middot; %d running &middot; %d failing &middot; every 3s", tally.Running, tally.Unhealthy)
 }

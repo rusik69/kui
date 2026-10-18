@@ -23,6 +23,7 @@ func TestDeploymentHistoryListsReplicaSetsWithDeploymentSelector(t *testing.T) {
 		}}
 	}
 	deployment := newObject("Deployment", "demo")
+	deployment.SetAnnotations(map[string]string{revisionAnnotation: "4"})
 	deployment.SetUID(types.UID("deployment-uid"))
 	deployment.Object["spec"] = map[string]interface{}{
 		"selector": map[string]interface{}{
@@ -41,17 +42,27 @@ func TestDeploymentHistoryListsReplicaSetsWithDeploymentSelector(t *testing.T) {
 		"replicas": int64(2),
 		"template": map[string]interface{}{
 			"spec": map[string]interface{}{
-				"containers": []interface{}{map[string]interface{}{"image": "example/app:v4"}},
+				"containers": []interface{}{
+					map[string]interface{}{"image": "example/app:v4"},
+					map[string]interface{}{"image": "example/sidecar:v4"},
+				},
+				"initContainers": []interface{}{map[string]interface{}{"image": "example/init:v4"}},
 			},
 		},
 	}
 
+	otherRevision := replicaSet.DeepCopy()
+	otherRevision.SetName("demo-122")
+	otherRevision.SetAnnotations(map[string]string{revisionAnnotation: "3"})
+	tiedRevision := replicaSet.DeepCopy()
+	tiedRevision.SetName("demo-121")
+	tiedRevision.SetAnnotations(map[string]string{revisionAnnotation: "3"})
 	deployments, _ := ByName("deployments")
 	replicaSets, _ := ByName("replicasets")
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		deployments.GVR: "DeploymentList",
 		replicaSets.GVR: "ReplicaSetList",
-	}, deployment, replicaSet)
+	}, deployment, otherRevision, tiedRevision, replicaSet)
 	var gotSelector labels.Selector
 	dynamicClient.PrependReactor("list", "replicasets", func(action ktesting.Action) (bool, runtime.Object, error) {
 		listAction, ok := action.(ktesting.ListAction)
@@ -70,7 +81,10 @@ func TestDeploymentHistoryListsReplicaSetsWithDeploymentSelector(t *testing.T) {
 	if gotSelector == nil || !gotSelector.Matches(labels.Set{"app": "demo", "tier": "frontend"}) || gotSelector.Matches(labels.Set{"app": "demo", "tier": "backend"}) {
 		t.Fatalf("ReplicaSet list selector = %v, does not match Deployment selector", gotSelector)
 	}
-	if len(revisions) != 1 || revisions[0].Revision != 4 || !revisions[0].IsCurrent {
-		t.Fatalf("DeploymentHistory() = %+v, want current revision 4 (deployment UID %q; ReplicaSet owners %+v)", revisions, deployment.GetUID(), replicaSet.GetOwnerReferences())
+	if len(revisions) != 3 || revisions[0].Revision != 4 || !revisions[0].IsCurrent || revisions[1].Name != "demo-121" || revisions[2].Name != "demo-122" {
+		t.Fatalf("DeploymentHistory() = %+v, want revision 4 current and tied revision 3 names in stable order", revisions)
+	}
+	if revisions[0].Image != "example/app:v4, example/sidecar:v4, example/init:v4" {
+		t.Errorf("revision images = %q, want all regular and init-container images", revisions[0].Image)
 	}
 }

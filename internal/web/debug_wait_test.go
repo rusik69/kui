@@ -11,7 +11,10 @@ import (
 
 func TestWaitForDebugPodReturnsWhenRunning(t *testing.T) {
 	err := waitForDebugPod(context.Background(), func(context.Context) (*corev1.Pod, error) {
-		return &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning}}, nil
+		return &corev1.Pod{Status: corev1.PodStatus{
+			Phase:             corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "shell", Ready: true}},
+		}}, nil
 	})
 	if err != nil {
 		t.Fatalf("waitForDebugPod() error = %v", err)

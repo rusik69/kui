@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
@@ -35,7 +36,9 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, "event: error\ndata: streaming unsupported\n\n")
 		return
 	}
 
@@ -51,14 +54,19 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown resource: "+resource, http.StatusNotFound)
 			return
 		}
-		events, err = k8s.Watch(r.Context(), c, rk, ns)
+		options := metav1.ListOptions{
+			ResourceVersion: r.URL.Query().Get("resourceVersion"),
+			LabelSelector:   r.URL.Query().Get("labelSelector"),
+			FieldSelector:   r.URL.Query().Get("fieldSelector"),
+		}
+		events, err = k8s.Watch(r.Context(), c, rk, ns, options)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
@@ -74,6 +82,9 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request) {
 // pingLoop keeps the stream open with periodic comments until the client
 // goes away.
 func (s *Server) pingLoop(w http.ResponseWriter, flusher http.Flusher, ctx context.Context) {
+	if s.writeSSE(w, flusher, "event: message\ndata: changed\n\n") {
+		return
+	}
 	ticker := time.NewTicker(ssePingInterval)
 	defer ticker.Stop()
 	for {
@@ -109,8 +120,12 @@ func (s *Server) streamEvents(w http.ResponseWriter, flusher http.Flusher, ctx c
 			if s.writeSSE(w, flusher, ": ping\n\n") {
 				return
 			}
-		case _, ok := <-events:
+		case event, ok := <-events:
 			if !ok {
+				return
+			}
+			if event.Error != nil || event.Type == "ERROR" {
+				s.writeSSE(w, flusher, "event: watch-error\ndata: Live updates stopped after the API server rejected the resource watch.\n\n")
 				return
 			}
 			if s.writeSSE(w, flusher, "event: message\ndata: changed\n\n") {
@@ -145,9 +160,17 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	c, err := s.clients(ctxName)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, "log stream setup failed", http.StatusBadGateway)
 		return
 	}
+	stream, err := k8s.StreamLogs(r.Context(), c, ns, name, k8s.LogOptions{
+		Container: container, Follow: true, TailLines: &tail,
+	})
+	if err != nil {
+		http.Error(w, "log stream setup failed", http.StatusBadGateway)
+		return
+	}
+	defer stream.Close()
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -155,15 +178,6 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	writer := &wsWriter{conn: conn}
-
-	stream, err := k8s.StreamLogs(r.Context(), c, ns, name, k8s.LogOptions{
-		Container: container, Follow: true, TailLines: &tail,
-	})
-	if err != nil {
-		_, _ = writer.Write([]byte("error: " + err.Error()))
-		return
-	}
-	defer stream.Close()
 
 	buf := make([]byte, 4096)
 	for {
@@ -174,6 +188,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err != nil {
+			if err != io.EOF {
+				_, _ = writer.Write([]byte("error: log stream failed"))
+			}
 			return
 		}
 	}

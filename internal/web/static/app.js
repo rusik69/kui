@@ -19,10 +19,20 @@ window.kui = (function () {
 	}
 
 	let logSocket = null;
+	let logAttempt = false;
+	let logBase = "";
 	let logPaused = false;
 	let logBuffer = "";
+	let logTrimmed = false;
+	let logFailed = false;
 	let terminalSession = null;
+	let shellAttempt = false;
+	let shellBase = "";
+	let watchFailed = false;
+	let secretTimers = new WeakMap();
+	let selectedNames = new Map();
 	const maxLogLines = 5000;
+	const maxLogBytes = 2 * 1024 * 1024;
 
 	function setStreamStatus(id, text) {
 		const status = document.getElementById(id);
@@ -38,7 +48,10 @@ window.kui = (function () {
 			logSocket.close();
 			logSocket = null;
 		}
+		logAttempt = false;
 		setStreamStatus("log-status", "Disconnected");
+		const reconnect = document.getElementById("log-reconnect");
+		if (reconnect) reconnect.disabled = !logBase;
 		const pause = document.getElementById("log-pause");
 		if (pause) {
 			pause.disabled = true;
@@ -50,48 +63,154 @@ window.kui = (function () {
 	function renderLogBuffer() {
 		const pane = document.getElementById("logs-pane");
 		if (!pane) return;
-		const filter = (document.getElementById("log-filter")?.value || "").toLowerCase();
+		const previousTop = pane.scrollTop;
+		const filterInput = document.getElementById("log-filter");
+		const filter = filterInput ? filterInput.value : "";
+		const caseSensitive = !!document.getElementById("log-case-sensitive")?.checked;
 		const lines = logBuffer.split("\n");
-		pane.textContent = filter ? lines.filter((line) => line.toLowerCase().includes(filter)).join("\n") : logBuffer;
-		pane.scrollTop = pane.scrollHeight;
+		const query = caseSensitive ? filter : filter.toLowerCase();
+		pane.textContent = filter ? lines.filter((line) =>
+			(caseSensitive ? line : line.toLowerCase()).includes(query)).join("\n") : logBuffer;
+		if (document.getElementById("log-follow")?.checked && !logPaused) {
+			pane.scrollTop = pane.scrollHeight;
+		} else {
+			pane.scrollTop = previousTop;
+		}
+		const status = document.getElementById("log-buffer-status");
+		if (status) status.textContent = lines.filter((line, index) => line || index < lines.length - 1).length +
+			" buffered lines" + (logTrimmed ? " · older lines trimmed" : "");
+	}
+
+	function logSettingsKey() {
+		const pane = document.getElementById("detail-pane");
+		return "kui.logs:" + (pane?.querySelector(".detail-header")?.dataset.podIdentity || location.pathname);
+	}
+
+	function restoreLogSettings() {
+		const container = document.getElementById("log-container");
+		const tail = document.getElementById("log-tail-lines");
+		if (!container || !tail) return;
+		try {
+			const saved = JSON.parse(localStorage.getItem(logSettingsKey()) || "{}");
+			if (saved && Array.from(container.options).some((option) => option.value === saved.container)) {
+				container.value = saved.container;
+			} else if (saved && saved.container) {
+				if (container.options.length) container.selectedIndex = 0;
+				saved.container = container.value;
+				localStorage.setItem(logSettingsKey(), JSON.stringify(saved));
+			}
+			const count = Number.parseInt(saved.tail, 10);
+			if (Number.isInteger(count) && count >= 1 && count <= maxLogLines) tail.value = String(count);
+		} catch { /* Storage is optional. */ }
+	}
+
+	function persistLogSettings() {
+		try {
+			localStorage.setItem(logSettingsKey(), JSON.stringify({
+				container: document.getElementById("log-container")?.value || "",
+				tail: document.getElementById("log-tail-lines")?.value || "500",
+			}));
+		} catch { /* Storage is optional. */ }
 	}
 
 	function startLogs(base) {
+		if (logAttempt) return;
 		disposeTerminal();
 		closeLogStream();
 		const pane = document.getElementById("logs-pane");
 		if (!pane) return;
 		logBuffer = "";
+		logTrimmed = false;
+		logFailed = false;
 		logPaused = false;
 		renderLogBuffer();
 		const params = new URLSearchParams();
-		const container = document.getElementById("log-container")?.value || "";
+		const containerSelect = document.getElementById("log-container");
+		const container = containerSelect?.value || "";
 		const tailInput = document.getElementById("log-tail-lines");
 		const parsedTail = Number.parseInt(tailInput?.value || "500", 10);
 		const tailLines = Number.isFinite(parsedTail) ? Math.max(1, Math.min(parsedTail, maxLogLines)) : 500;
 		if (tailInput) tailInput.value = String(tailLines);
 		if (container) params.set("container", container);
 		params.set("tailLines", String(tailLines));
+		persistLogSettings();
+		logAttempt = true;
 		const ws = new WebSocket(wsURL(base + "?" + params.toString()));
 		logSocket = ws;
 		const pause = document.getElementById("log-pause");
-		if (pause) pause.disabled = false;
-		ws.onopen = () => setStreamStatus("log-status", "Connected · " + (container || "default container"));
-		ws.onmessage = (ev) => {
-			if (logPaused) return;
-			logBuffer += ev.data;
-			const lines = logBuffer.split("\n");
-			if (lines.length > maxLogLines) logBuffer = lines.slice(-maxLogLines).join("\n");
-			renderLogBuffer();
+		if (pause) pause.disabled = true;
+		const reconnect = document.getElementById("log-reconnect");
+		if (reconnect) reconnect.disabled = true;
+		ws.onopen = () => {
+			if (logSocket !== ws) return;
+			// Keep the attempt active for the lifetime of the socket to prevent duplicate connects.
+			if (pause) pause.disabled = false;
+			const reconnect = document.getElementById("log-reconnect");
+			if (reconnect) reconnect.disabled = true;
+			setStreamStatus("log-status", "Connected · " + (container || "default container"));
 		};
-		ws.onerror = () => setStreamStatus("log-status", "Connection error");
+		ws.onmessage = (ev) => {
+			if (logSocket !== ws) return;
+			logBuffer += ev.data;
+			let lines = logBuffer.split("\n");
+			let bytes = new TextEncoder().encode(logBuffer).length;
+			while (lines.length && (lines.length > maxLogLines || bytes > maxLogBytes)) {
+				if (lines.length === 1) lines = [];
+				else lines.shift();
+				logTrimmed = true;
+				bytes = new TextEncoder().encode(lines.join("\n")).length;
+			}
+			const status = document.getElementById("log-buffer-status");
+			if (status && logPaused) status.textContent =
+				(lines.filter((line, index) => line || index < lines.length - 1).length) +
+				" buffered lines" + (logTrimmed ? " · older lines trimmed" : "");
+			if (!logPaused) renderLogBuffer();
+		};
+		ws.onerror = () => {
+			if (logSocket !== ws) return;
+			logAttempt = false;
+			logFailed = true;
+			const reconnect = document.getElementById("log-reconnect");
+			if (reconnect) reconnect.disabled = false;
+			const pause = document.getElementById("log-pause");
+			if (pause) pause.disabled = true;
+			setStreamStatus("log-status", "Connection error — reconnect available");
+		};
 		ws.onclose = () => {
 			if (logSocket === ws) {
 				logSocket = null;
-				setStreamStatus("log-status", "Disconnected");
+				logAttempt = false;
+				const reconnect = document.getElementById("log-reconnect");
+				if (reconnect) reconnect.disabled = false;
+				setStreamStatus("log-status", logFailed ? "Connection error — reconnect available" : "Disconnected — reconnect available");
 				if (pause) pause.disabled = true;
 			}
 		};
+	}
+
+	function downloadLogs() {
+		const pod = document.querySelector("#detail-pane .detail-header strong")?.textContent || "pod";
+		const container = document.getElementById("log-container")?.value || "default";
+		const safe = (value) => value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^[-_.]+|[-_.]+$/g, "") || "unknown";
+		const blob = new Blob([logBuffer], { type: "text/plain;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = safe(pod) + "-" + safe(container) + (logTrimmed ? "-partial" : "") + ".log";
+		link.hidden = true;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+	}
+
+	function jumpToLatest() {
+		const pane = document.getElementById("logs-pane");
+		if (pane) pane.scrollTop = pane.scrollHeight;
+	}
+
+	function toggleFollow(enabled) {
+		if (enabled) jumpToLatest();
 	}
 
 	function toggleLogs() {
@@ -102,11 +221,16 @@ window.kui = (function () {
 			button.textContent = logPaused ? "Resume" : "Pause";
 			button.setAttribute("aria-pressed", String(logPaused));
 		}
-		setStreamStatus("log-status", logPaused ? "Paused" : "Connected");
+		if (logPaused) setStreamStatus("log-status", "Paused");
+		else {
+			setStreamStatus("log-status", "Connected");
+			renderLogBuffer();
+		}
 	}
 
 	function clearLogs() {
 		logBuffer = "";
+		logTrimmed = false;
 		renderLogBuffer();
 	}
 
@@ -126,7 +250,10 @@ window.kui = (function () {
 		session.ws.close();
 		session.term.dispose();
 		terminalSession = null;
+		shellAttempt = false;
 		setStreamStatus("shell-status", "Disconnected");
+		const reconnect = document.getElementById("shell-reconnect");
+		if (reconnect) reconnect.disabled = !shellBase;
 	}
 
 	function disposeStreams() {
@@ -135,10 +262,13 @@ window.kui = (function () {
 	}
 
 	function startShell(base) {
+		if (shellAttempt) return;
+		shellBase = base;
 		closeLogStream();
 		disposeTerminal();
 		const pane = document.getElementById("term-pane");
 		if (!pane) return;
+		shellAttempt = true;
 		setStreamStatus("shell-status", "Connecting…");
 		pane.innerHTML = "";
 		const container = document.getElementById("shell-container")?.value || "";
@@ -161,7 +291,6 @@ window.kui = (function () {
 		if (observer) observer.observe(pane);
 		window.addEventListener("resize", resize);
 		requestAnimationFrame(resize);
-
 		let ws;
 		try {
 			ws = new WebSocket(wsURL(base + (params.size ? "?" + params.toString() : "")));
@@ -169,28 +298,47 @@ window.kui = (function () {
 			if (observer) observer.disconnect();
 			window.removeEventListener("resize", resize);
 			term.dispose();
-			setStreamStatus("shell-status", "Connection failed");
+			shellAttempt = false;
+			setStreamStatus("shell-status", "Connection failed — reconnect available");
+			const reconnect = document.getElementById("shell-reconnect");
+			if (reconnect) reconnect.disabled = false;
 			return;
 		}
 		const session = { term, ws, observer, resize };
 		terminalSession = session;
+		const reconnect = document.getElementById("shell-reconnect");
+		if (reconnect) reconnect.disabled = true;
 		ws.onopen = () => {
 			if (terminalSession !== session) return;
 			setStreamStatus("shell-status", "Connected · " + (container || "default container"));
 			term.focus();
 		};
-		ws.onmessage = (ev) => term.write(ev.data);
+		ws.onmessage = (ev) => {
+			if (terminalSession === session) term.write(ev.data);
+		};
 		ws.onerror = () => {
-			setStreamStatus("shell-status", "Connection error");
+			if (terminalSession !== session) return;
+			shellAttempt = false;
+			setStreamStatus("shell-status", "Connection error — reconnect available");
+			const retry = document.getElementById("shell-reconnect");
+			if (retry) retry.disabled = false;
 			term.write("\r\n[connection error]");
 		};
 		ws.onclose = () => {
-			if (terminalSession === session) setStreamStatus("shell-status", "Disconnected");
-			term.write("\r\n[connection closed]");
+			if (terminalSession === session) {
+				shellAttempt = false;
+				setStreamStatus("shell-status", "Disconnected — reconnect available");
+				const retry = document.getElementById("shell-reconnect");
+				if (retry) retry.disabled = false;
+			}
+			if (terminalSession === session) term.write("\r\n[connection closed]");
 		};
 		term.onData((data) => {
 			if (ws.readyState === WebSocket.OPEN) ws.send(data);
 		});
+	}
+	function reconnectShell() {
+		if (!shellAttempt && shellBase) startShell(shellBase);
 	}
 	function openDebugShell() {
 		const namespace = document.getElementById("namespace-select");
@@ -228,12 +376,16 @@ window.kui = (function () {
 	}
 
 	function filterRows(value) {
-		const needle = value.toLowerCase();
+		const needle = (value || "").toLowerCase();
+		const selectedColumn = document.getElementById("column-filter")?.value || "";
 		document.querySelectorAll("#kui-table").forEach((table) => {
+			const headers = Array.from(table.querySelectorAll("thead th"));
+			const columnIndex = selectedColumn ? headers.findIndex((th) => th.textContent.trim() === selectedColumn) : -1;
 			const rows = Array.from(table.querySelectorAll("tbody tr[data-id]"));
 			let visible = 0;
 			rows.forEach((tr) => {
-				const matches = tr.textContent.toLowerCase().includes(needle);
+				const content = columnIndex >= 0 && tr.cells[columnIndex] ? tr.cells[columnIndex].textContent : tr.textContent;
+				const matches = content.toLowerCase().includes(needle);
 				tr.style.display = matches ? "" : "none";
 				if (matches) visible++;
 			});
@@ -241,8 +393,36 @@ window.kui = (function () {
 			if (empty) empty.style.display = needle && rows.length > 0 && visible === 0 ? "" : "none";
 		});
 		const lp = findListPane(document);
-		if (lp) syncSelectAll(lp, selectedRowIDs(lp));
+		if (lp) updateBulkBar(lp);
 		syncClientListStateURL();
+	}
+
+	function filterColumn() {
+		filterRows(document.getElementById("row-filter")?.value || "");
+	}
+
+	function resetTable() {
+		const lp = findListPane(document);
+		if (!lp) return;
+		const label = document.getElementById("label-selector");
+		const field = document.getElementById("field-selector");
+		const size = document.getElementById("page-size");
+		if (label) label.value = "";
+		if (field) field.value = "";
+		if (size) size.value = size.dataset.defaultValue || "100";
+		lp.dataset.sortKey = "";
+		lp.dataset.sortDir = "asc";
+		const rowFilter = document.getElementById("row-filter");
+		if (rowFilter) rowFilter.value = "";
+		const col = document.getElementById("column-filter");
+		if (col) col.value = "";
+		lp.dataset.pageHistory = "[]";
+		const url = new URL(lp.dataset.listUrl || location.href, location.origin);
+		if (size) url.searchParams.set("limit", size.value);
+		url.searchParams.delete("frame");
+		history.replaceState(history.state, "", url.pathname + url.search);
+		clearSelection();
+		loadResourcePage(url.toString());
 	}
 
 	function clearRowFilter() {
@@ -254,7 +434,7 @@ window.kui = (function () {
 	}
 
 	function selectedRowIDs(lp) {
-		return new Set((lp.dataset.checkedRows || "").split(",").filter(Boolean));
+		return new Set(selectedNames.keys());
 	}
 
 	function syncSelectAll(lp, selected) {
@@ -266,6 +446,26 @@ window.kui = (function () {
 		selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visible.length;
 		selectAll.disabled = visible.length === 0;
 	}
+	function persistSelectedRows() {
+		const state = Object.assign({}, history.state || {});
+		state.kuiSelectionScope = location.pathname;
+		state.kuiSelectedRows = Array.from(selectedNames.entries());
+		history.replaceState(state, "", location.pathname + location.search);
+	}
+
+	function restoreSelectedRows(state) {
+		selectedNames.clear();
+		const entries = state && state.kuiSelectionScope === location.pathname && Array.isArray(state.kuiSelectedRows)
+			? state.kuiSelectedRows : [];
+		entries.forEach((entry) => {
+			if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string") {
+				selectedNames.set(entry[0], entry[1]);
+			}
+		});
+		const lp = findListPane(document);
+		if (lp) setSelectedRows(lp, selectedRowIDs(lp));
+		else persistSelectedRows();
+	}
 
 	function setSelectedRows(lp, selected) {
 		lp.dataset.checkedRows = Array.from(selected).join(",");
@@ -273,7 +473,63 @@ window.kui = (function () {
 			cb.checked = selected.has(cb.dataset.id);
 		});
 		syncSelectAll(lp, selected);
+		persistSelectedRows();
 		updateBulkBar(lp);
+	}
+
+	function copySelectedNames() {
+		const lp = findListPane(document);
+		if (!lp) return;
+		const ordered = [];
+		const copied = new Set();
+		lp.querySelectorAll("tbody tr[data-id]").forEach((row) => {
+			if (selectedNames.has(row.dataset.id) && row.style.display !== "none") {
+				ordered.push(selectedNames.get(row.dataset.id));
+				copied.add(row.dataset.id);
+			}
+		});
+		selectedNames.forEach((name, id) => {
+			if (!copied.has(id)) ordered.push(name);
+		});
+		if (ordered.length) copyText(ordered.join("\n"));
+	}
+
+	function selectAllPage() {
+		const lp = findListPane(document);
+		if (!lp) return;
+		const selected = selectedRowIDs(lp);
+		lp.querySelectorAll(".row-select").forEach((cb) => {
+			selected.add(cb.dataset.id);
+			selectedNames.set(cb.dataset.id, cb.closest("tr")?.dataset.name || "");
+		});
+		setSelectedRows(lp, selected);
+	}
+
+	function exportCSV() {
+		const table = findListPane(document)?.querySelector("#kui-table");
+		const rows = Array.from(table?.querySelectorAll("tbody tr[data-id]") || [])
+			.filter((row) => row.style.display !== "none");
+		if (!rows.length) {
+			showToast({ level: "error", message: "CSV export is empty: no visible rows." });
+			return;
+		}
+		const headers = Array.from(table.querySelectorAll("thead th")).filter((th) => !th.classList.contains("select-col"));
+		const escape = (value) => '"' + value.replace(/"/g, '""') + '"';
+		const lines = [headers.map((th) => escape(th.textContent.trim())).join(",")];
+		rows.forEach((row) => {
+			const cells = Array.from(row.cells).filter((cell) => !cell.classList.contains("select-col"));
+			lines.push(cells.map((cell) => escape(cell.textContent)).join(","));
+		});
+		const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = "resources.csv";
+		link.hidden = true;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	}
 
 	// ---- detail pane open/close (Foundation) ----
@@ -281,8 +537,15 @@ window.kui = (function () {
 	function clearDetailPane() {
 		const dp = document.getElementById("detail-pane");
 		if (!dp) return;
+		hideAllSecrets();
 		disposeStreams();
-		dp.classList.remove("open");
+		logBuffer = "";
+		logTrimmed = false;
+		logFailed = false;
+		logBase = "";
+		shellBase = "";
+		relatedNodeHTML = "";
+		relatedNodeRowID = "";
 		const splitter = document.getElementById("detail-splitter");
 		if (splitter) splitter.style.display = "none";
 		setBreadcrumbName("");
@@ -474,7 +737,7 @@ window.kui = (function () {
 		syncClientListStateURL();
 		const current = new URL(location.href);
 		const target = new URL("/c/" + ctx + "/" + ns + "/" + resource, location.origin);
-		["labelSelector", "fieldSelector", "limit", "rowFilter", "sortColumn", "sortDir"].forEach((key) => {
+		["labelSelector", "fieldSelector", "limit", "rowFilter", "sortColumn", "sortDir", "columnFilter"].forEach((key) => {
 			if (current.searchParams.has(key)) target.searchParams.set(key, current.searchParams.get(key));
 		});
 		location.href = target.pathname + target.search;
@@ -482,12 +745,14 @@ window.kui = (function () {
 
 	function syncClientListStateURL() {
 		const url = new URL(location.href);
-		const filterInput = document.getElementById("row-filter");
-		const filter = filterInput ? filterInput.value : "";
+		const filter = document.getElementById("row-filter")?.value || "";
+		const column = document.getElementById("column-filter")?.value || "";
 		if (filter) url.searchParams.set("rowFilter", filter);
 		else url.searchParams.delete("rowFilter");
+		if (column) url.searchParams.set("columnFilter", column);
+		else url.searchParams.delete("columnFilter");
 		const lp = findListPane(document);
-		if (lp && lp.dataset.sortKey) {
+		if (lp?.dataset.sortKey) {
 			url.searchParams.set("sortColumn", lp.dataset.sortKey);
 			url.searchParams.set("sortDir", lp.dataset.sortDir || "asc");
 		} else {
@@ -500,11 +765,19 @@ window.kui = (function () {
 	function restoreClientListState() {
 		const params = new URLSearchParams(location.search);
 		const filterInput = document.getElementById("row-filter");
+		const colInput = document.getElementById("column-filter");
 		if (filterInput) filterInput.value = params.get("rowFilter") || "";
+		if (colInput) colInput.value = params.get("columnFilter") || "";
 		const lp = findListPane(document);
 		if (!lp) return;
 		lp.dataset.sortKey = params.get("sortColumn") || "";
 		lp.dataset.sortDir = params.get("sortDir") === "desc" ? "desc" : "asc";
+		const labels = document.getElementById("label-selector");
+		const fields = document.getElementById("field-selector");
+		const size = document.getElementById("page-size");
+		if (labels) labels.value = params.get("labelSelector") || labels.value;
+		if (fields) fields.value = params.get("fieldSelector") || fields.value;
+		if (size && params.has("limit")) size.value = params.get("limit");
 	}
 
 	function applyResourceSelectors() {
@@ -581,6 +854,8 @@ window.kui = (function () {
 		listURL.searchParams.delete("continue");
 		listURL.searchParams.set("limit", String(limit));
 		lp.dataset.pageHistory = "[]";
+		const pageURL = new URL(listURL);
+		history.replaceState(history.state, "", pageURL.pathname + pageURL.search);
 		loadResourcePage(listURL.toString());
 	}
 
@@ -590,8 +865,9 @@ window.kui = (function () {
 	}
 
 	function copyClientListState(source, target) {
-		["rowFilter", "sortColumn", "sortDir"].forEach((key) => {
+		["rowFilter", "sortColumn", "sortDir", "columnFilter"].forEach((key) => {
 			if (source.searchParams.has(key)) target.searchParams.set(key, source.searchParams.get(key));
+			else target.searchParams.delete(key);
 		});
 	}
 
@@ -790,13 +1066,14 @@ window.kui = (function () {
 	function updateBulkBar(lp) {
 		const bar = document.getElementById("bulk-bar");
 		if (!bar) return;
-		const checked = (lp.dataset.checkedRows || "").split(",").filter(Boolean);
+		const checked = Array.from(selectedNames.keys());
+		const visible = Array.from(lp.querySelectorAll(".row-select")).filter((cb) => cb.closest("tr").style.display !== "none");
+		const visibleSelected = visible.filter((cb) => selectedNames.has(cb.dataset.id)).length;
 		if (checked.length) {
 			bar.style.display = "flex";
-			document.getElementById("bulk-count").textContent = checked.length + " selected";
-		} else {
-			bar.style.display = "none";
-		}
+			const count = document.getElementById("bulk-count");
+			if (count) count.textContent = checked.length + " selected across pages · " + visibleSelected + " of " + visible.length + " visible selected";
+		} else bar.style.display = "none";
 	}
 
 	function onTableChange(e) {
@@ -804,10 +1081,9 @@ window.kui = (function () {
 		if (cb) {
 			const lp = cb.closest(".list-pane");
 			if (!lp) return;
-			const selected = selectedRowIDs(lp);
-			if (cb.checked) selected.add(cb.dataset.id);
-			else selected.delete(cb.dataset.id);
-			setSelectedRows(lp, selected);
+			if (cb.checked) selectedNames.set(cb.dataset.id, cb.closest("tr")?.dataset.name || "");
+			else selectedNames.delete(cb.dataset.id);
+			setSelectedRows(lp, selectedRowIDs(lp));
 			return;
 		}
 		const selectAll = e.target.closest("#select-all-rows");
@@ -817,22 +1093,32 @@ window.kui = (function () {
 			const selected = selectedRowIDs(lp);
 			const visible = Array.from(lp.querySelectorAll(".row-select")).filter((c) => c.closest("tr").style.display !== "none");
 			visible.forEach((cb) => {
-				if (selectAll.checked) selected.add(cb.dataset.id);
-				else selected.delete(cb.dataset.id);
+				if (selectAll.checked) {
+					selected.add(cb.dataset.id);
+					selectedNames.set(cb.dataset.id, cb.closest("tr")?.dataset.name || "");
+				} else {
+					selected.delete(cb.dataset.id);
+					selectedNames.delete(cb.dataset.id);
+				}
 			});
 			setSelectedRows(lp, selected);
+			return;
 		}
+		if (e.target.id === "column-filter") filterColumn();
+		if (e.target.id === "log-container" || e.target.id === "log-tail-lines") persistLogSettings();
 	}
 
 	function clearSelection() {
+		selectedNames.clear();
 		const lp = findListPane(document);
 		if (lp) setSelectedRows(lp, new Set());
+		else persistSelectedRows();
 	}
 
 	function bulkDelete() {
 		const lp = findListPane(document);
 		if (!lp) return;
-		const ids = (lp.dataset.checkedRows || "").split(",").filter(Boolean);
+		const ids = Array.from(selectedNames.keys());
 		if (!ids.length) return;
 		if (!confirm("Delete " + ids.length + " selected resources?")) return;
 		htmx.ajax("POST", lp.dataset.bulkDeleteUrl, { values: { path: ids } });
@@ -1198,6 +1484,21 @@ window.kui = (function () {
 	// data-b64 attribute) — decoding happens entirely client-side, no
 	// server round trip, no plaintext ever sent beyond what was already
 	// fetched for this object.
+	function hideSecretValue(valueEl) {
+		if (!valueEl) return;
+		const row = valueEl.closest(".secret-row");
+		valueEl.textContent = "••••••••";
+		valueEl.classList.add("masked");
+		const button = row?.querySelector("button");
+		if (button) button.textContent = "Show";
+		clearTimeout(secretTimers.get(valueEl));
+		secretTimers.delete(valueEl);
+	}
+
+	function hideAllSecrets() {
+		document.querySelectorAll("#detail-pane .secret-value").forEach(hideSecretValue);
+	}
+
 	function toggleSecretValue(btn) {
 		const valueEl = btn.previousElementSibling;
 		if (!valueEl) return;
@@ -1206,16 +1507,144 @@ window.kui = (function () {
 			try {
 				const bytes = Uint8Array.from(atob(valueEl.dataset.b64), (c) => c.charCodeAt(0));
 				decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-			} catch (e) {
+			} catch {
 				decoded = "(unable to decode)";
 			}
 			valueEl.textContent = decoded;
 			valueEl.classList.remove("masked");
 			btn.textContent = "Hide";
-		} else {
-			valueEl.textContent = "••••••••";
-			valueEl.classList.add("masked");
-			btn.textContent = "Show";
+			secretTimers.set(valueEl, window.setTimeout(() => hideSecretValue(valueEl), 30000));
+		} else hideSecretValue(valueEl);
+	}
+
+	function searchDetail(value) {
+		const pane = document.getElementById("tab-details");
+		if (!pane) return;
+		const query = (value || "").toLowerCase();
+		pane.querySelectorAll(".kv-grid > dt, .kv-grid > dd, .resource-table tbody tr, .secret-row").forEach((el) => {
+			el.style.display = !query || el.textContent.toLowerCase().includes(query) ? "" : "none";
+		});
+	}
+
+	function filterEvents(value) {
+		const query = (value || "").toLowerCase();
+		document.querySelectorAll("#tab-events tbody tr").forEach((row) => {
+			row.style.display = !query || row.textContent.toLowerCase().includes(query) ? "" : "none";
+		});
+	}
+
+	function sortHistory(th) {
+		const table = th.closest("table");
+		const index = Array.from(th.parentElement.children).indexOf(th);
+		const descending = th.getAttribute("aria-sort") === "ascending";
+		table.querySelectorAll("th").forEach((header) => header.setAttribute("aria-sort", "none"));
+		th.setAttribute("aria-sort", descending ? "descending" : "ascending");
+		const tbody = table.tBodies[0];
+		Array.from(tbody.rows).filter((row) => row.cells.length > index).sort((a, b) => {
+			const av = parseSortToken(index === 0 ? a.cells[index].textContent.replace(/\s+\(current\)$/, "") : a.cells[index].textContent);
+			const bv = parseSortToken(index === 0 ? b.cells[index].textContent.replace(/\s+\(current\)$/, "") : b.cells[index].textContent);
+			return (av < bv ? -1 : av > bv ? 1 : 0) * (descending ? -1 : 1);
+		}).forEach((row) => tbody.appendChild(row));
+	}
+	function reconnectLogs() {
+		if (!logAttempt && logBase) startLogs(logBase);
+	}
+
+	function samePort(checkbox) {
+		const form = checkbox.closest("form");
+		const local = form?.querySelector('[name="localPort"]');
+		const remote = form?.querySelector('[name="remotePort"]');
+		if (!local || !remote) return;
+		if (checkbox.checked) local.value = remote.value;
+	}
+
+	function decorateCopyValues(root) {
+		root.querySelectorAll("#tab-details .resource-table tbody tr").forEach((row) => {
+			Array.from(row.cells).forEach((cell) => {
+				if (cell.querySelector(".copy-action") || cell.classList.contains("empty-state")) return;
+				const value = cell.textContent;
+				const button = document.createElement("button");
+				button.type = "button";
+				button.className = "copy-action";
+				button.setAttribute("aria-label", "Copy " + value);
+				button.title = "Copy value";
+				button.dataset.copyText = value;
+				button.addEventListener("click", (event) => {
+					event.stopPropagation();
+					copyText(button.dataset.copyText);
+				});
+				cell.appendChild(button);
+			});
+		});
+		root.querySelectorAll("#tab-details .pill").forEach((pill) => {
+			if (pill.querySelector(".copy-action")) return;
+			const value = pill.textContent;
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "copy-action";
+			button.title = "Copy value";
+			button.setAttribute("aria-label", "Copy " + value);
+			button.dataset.copyText = value;
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				copyText(button.dataset.copyText);
+			});
+			pill.appendChild(button);
+		});
+		root.querySelectorAll("#tab-details .kv-grid dd").forEach((valueEl) => {
+			if (valueEl.querySelector(".copy-action, .pill-row")) return;
+			const value = valueEl.innerText;
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "copy-action";
+			button.title = "Copy value";
+			button.setAttribute("aria-label", "Copy value");
+			button.dataset.copyText = value;
+			button.addEventListener("click", (event) => {
+				event.stopPropagation();
+				copyText(button.dataset.copyText);
+			});
+			valueEl.appendChild(button);
+		});
+	}
+
+	let relatedNodeRowID = "";
+	let relatedNodeHTML = "";
+
+	function returnToRelatedNode() {
+		const pane = document.getElementById("detail-pane");
+		if (!pane || !relatedNodeHTML) return;
+		disposeStreams();
+		pane.innerHTML = relatedNodeHTML;
+		relatedNodeHTML = "";
+		pane.classList.add("open");
+		decorateCopyValues(pane);
+		const row = Array.from(pane.querySelectorAll(".related-pod-row")).find((item) => item.dataset.id === relatedNodeRowID);
+		if (row) row.focus();
+		relatedNodeRowID = "";
+	}
+
+	function setupDetailPane() {
+		const pane = document.getElementById("detail-pane");
+		if (!pane) return;
+		const header = pane.querySelector(".detail-header");
+		if (!header) return;
+		decorateCopyValues(pane);
+		const logButton = pane.querySelector("#tab-logs .stream-controls button[onclick*='startLogs']");
+		if (logButton) {
+			const match = logButton.getAttribute("onclick")?.match(/startLogs\('([^']+)'\)/);
+			if (match) logBase = match[1];
+			restoreLogSettings();
+		}
+		const shell = pane.querySelector("#shell-container");
+		if (shell && shell.selectedIndex < 0 && shell.options.length) shell.selectedIndex = 0;
+		if (relatedNodeHTML) {
+			const back = document.createElement("button");
+			back.type = "button";
+			back.className = "btn";
+			back.textContent = "Back to node";
+			back.addEventListener("click", returnToRelatedNode);
+			header.querySelector(".detail-header-row")?.appendChild(back);
 		}
 	}
 
@@ -1229,6 +1658,13 @@ window.kui = (function () {
 	document.addEventListener("DOMContentLoaded", initTheme);
 
 	document.addEventListener("click", onTableClick);
+	document.addEventListener("click", (e) => {
+		const related = e.target.closest(".related-pod-row");
+		if (related) {
+			relatedNodeHTML = document.getElementById("detail-pane")?.innerHTML || "";
+			relatedNodeRowID = related.dataset.id || "";
+		}
+	}, true);
 	document.addEventListener("change", onTableChange);
 	document.addEventListener("input", (e) => {
 		if (e.target && e.target.id === "yaml-editor") updateYAMLDirtyState(e.target);
@@ -1240,6 +1676,13 @@ window.kui = (function () {
 	});
 
 	document.addEventListener("keydown", onTableKeydown);
+	document.addEventListener("keydown", (e) => {
+		const historyHeader = e.target.closest(".history-table th[role='button']");
+		if (historyHeader && ["Enter", " "].includes(e.key)) {
+			e.preventDefault();
+			sortHistory(historyHeader);
+		}
+	});
 	document.addEventListener("keydown", (e) => {
 		if (isConfirmOpen()) {
 			if (e.key === "Escape") {
@@ -1294,11 +1737,20 @@ window.kui = (function () {
 		if (statusbar) statusbar.dataset.watchState = state;
 		if (!label) return;
 		label.textContent = state === "connected" ? "Live updates connected" :
-			state === "reconnecting" ? "Live updates reconnecting" : "Connecting to live updates";
+			state === "error" ? "Live watch failed; reconnecting" : "Live updates reconnecting";
 	}
 
-	document.body.addEventListener("htmx:sseOpen", () => setWatchState("connected"));
-	document.body.addEventListener("htmx:sseError", () => setWatchState("reconnecting"));
+	document.body.addEventListener("htmx:sseOpen", () => {
+		watchFailed = false;
+		setWatchState("connected");
+	});
+	document.body.addEventListener("htmx:sseError", () => setWatchState(watchFailed ? "error" : "reconnecting"));
+	document.body.addEventListener("htmx:sseMessage", (e) => {
+		if (e.detail && e.detail.type === "watch-error") {
+			watchFailed = true;
+			setWatchState("error");
+		}
+	});
 
 	// Intercepts every hx-confirm-bearing element globally — no per-button
 	// wiring needed for the two existing call sites (Delete/Evict) or any
@@ -1354,7 +1806,10 @@ window.kui = (function () {
 	});
 
 	document.body.addEventListener("htmx:beforeSwap", (e) => {
-		if (e.detail.target && e.detail.target.id === "detail-pane") disposeStreams();
+		if (e.detail.target && e.detail.target.id === "detail-pane") {
+			hideAllSecrets();
+			disposeStreams();
+		}
 		if (e.detail.target && e.detail.target.classList && e.detail.target.classList.contains("list-pane")) {
 			e.detail.target.dataset.scrollTop = e.detail.target.scrollTop;
 		}
@@ -1373,7 +1828,13 @@ window.kui = (function () {
 			target.classList.toggle("open", hasContent);
 			const splitter = document.getElementById("detail-splitter");
 			if (splitter) splitter.style.display = hasContent ? "block" : "none";
-			syncYAMLDirtyState();
+			setupDetailPane();
+			if (!target.querySelector("#tab-logs")) {
+				logBuffer = "";
+				logTrimmed = false;
+				logBase = "";
+				shellBase = "";
+			}
 			const terminal = target.querySelector("#term-pane[data-exec-url]");
 			if (terminal) startShell(terminal.dataset.execUrl);
 		}
@@ -1387,10 +1848,32 @@ window.kui = (function () {
 		}
 
 		if (target.classList && target.classList.contains("list-pane")) {
+			const resourceVersion = target.querySelector(".toolbar")?.dataset.resourceVersion;
+			const source = document.getElementById("watch-source");
+			const connect = source?.getAttribute("sse-connect");
+			if (resourceVersion && connect) {
+				const watchURL = new URL(connect, location.origin);
+				watchURL.searchParams.set("resourceVersion", resourceVersion);
+				for (const [key, id] of [["labelSelector", "label-selector"], ["fieldSelector", "field-selector"]]) {
+					const value = target.querySelector("#" + id)?.value.trim() || "";
+					if (value) watchURL.searchParams.set(key, value);
+					else watchURL.searchParams.delete(key);
+				}
+				const nextConnect = watchURL.pathname + watchURL.search;
+				if (connect !== nextConnect) {
+					// Close the old source before the SSE extension processes this URL again.
+					window.htmx.trigger(source, "htmx:beforeCleanupElement");
+					source.setAttribute("sse-connect", nextConnect);
+					window.htmx.trigger(source, "htmx:afterProcessNode");
+				}
+			}
+			restoreClientListState();
 			applySortAndSelection(target);
 			if (target.dataset.scrollTop) target.scrollTop = parseInt(target.dataset.scrollTop, 10);
 		}
 	});
+	window.addEventListener("popstate", (event) => restoreSelectedRows(event.state));
+	restoreSelectedRows(history.state);
 	restoreClientListState();
 	restoreRowDensity();
 	return {
@@ -1403,6 +1886,20 @@ window.kui = (function () {
 		filterLogs,
 		copyTerminalSelection,
 		clearTerminal,
+		reconnectLogs,
+		reconnectShell,
+		downloadLogs,
+		jumpToLatest,
+		toggleFollow,
+		searchDetail,
+		filterEvents,
+		sortHistory,
+		hideAllSecrets,
+		samePort,
+		resetTable,
+		copySelectedNames,
+		exportCSV,
+		selectAllPage,
 		filterRows,
 		closeDetail,
 		clearRowFilter,

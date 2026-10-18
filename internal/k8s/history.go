@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -57,6 +58,7 @@ func DeploymentHistory(ctx context.Context, c *Clients, namespace, deploymentNam
 		return nil, err
 	}
 
+	currentRevision, _ := strconv.Atoi(dep.GetAnnotations()[revisionAnnotation])
 	var revisions []Revision
 	for _, rs := range rsList.Items {
 		owned := false
@@ -71,31 +73,40 @@ func DeploymentHistory(ctx context.Context, c *Clients, namespace, deploymentNam
 		}
 		rev, _ := strconv.Atoi(rs.GetAnnotations()[revisionAnnotation])
 		replicas, _, _ := unstructured.NestedInt64(rs.Object, "spec", "replicas")
-		image := firstContainerImage(rs.Object)
 		revisions = append(revisions, Revision{
-			Name:     rs.GetName(),
-			Revision: rev,
-			Replicas: replicas,
-			Created:  rs.GetCreationTimestamp(),
-			Image:    image,
+			Name: rs.GetName(), Revision: rev, Replicas: replicas,
+			Created: rs.GetCreationTimestamp(), Image: containerImages(rs.Object),
+			IsCurrent: currentRevision != 0 && rev == currentRevision,
 		})
 	}
-	sort.Slice(revisions, func(i, j int) bool { return revisions[i].Revision > revisions[j].Revision })
-	if len(revisions) > 0 {
-		revisions[0].IsCurrent = true
-	}
+	sort.Slice(revisions, func(i, j int) bool {
+		if revisions[i].Revision != revisions[j].Revision {
+			return revisions[i].Revision > revisions[j].Revision
+		}
+		if !revisions[i].Created.Equal(&revisions[j].Created) {
+			return revisions[i].Created.After(revisions[j].Created.Time)
+		}
+		return revisions[i].Name < revisions[j].Name
+	})
 	return revisions, nil
 }
 
-func firstContainerImage(obj map[string]interface{}) string {
-	containers, ok, _ := unstructured.NestedSlice(obj, "spec", "template", "spec", "containers")
-	if !ok || len(containers) == 0 {
-		return ""
+func containerImages(obj map[string]interface{}) string {
+	containers, _, _ := unstructured.NestedSlice(obj, "spec", "template", "spec", "containers")
+	initContainers, _, _ := unstructured.NestedSlice(obj, "spec", "template", "spec", "initContainers")
+	images := make([]string, 0, len(containers)+len(initContainers))
+	appendImages := func(containers []interface{}) {
+		for _, item := range containers {
+			container, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if image, ok := container["image"].(string); ok && image != "" {
+				images = append(images, image)
+			}
+		}
 	}
-	c, ok := containers[0].(map[string]interface{})
-	if !ok {
-		return ""
-	}
-	img, _ := c["image"].(string)
-	return img
+	appendImages(containers)
+	appendImages(initContainers)
+	return strings.Join(images, ", ")
 }

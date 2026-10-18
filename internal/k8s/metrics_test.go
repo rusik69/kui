@@ -42,3 +42,21 @@ func TestPodMetricsWithoutClientIsUnavailable(t *testing.T) {
 		t.Fatalf("PodMetrics() = (%v, %v, %v), want unavailable without error", list, ok, err)
 	}
 }
+
+func TestPodMetricsAppliesFieldSelectorAndReportsEmptyResponseAvailable(t *testing.T) {
+	client := metricsfake.NewSimpleClientset()
+	var gotFields string
+	client.PrependReactor("list", "pods", func(action ktesting.Action) (bool, runtime.Object, error) {
+		gotFields = action.(ktesting.ListAction).GetListRestrictions().Fields.String()
+		return false, nil, nil
+	})
+	list, available, err := PodMetrics(context.Background(), &Clients{Metrics: client}, "default", metav1.ListOptions{
+		FieldSelector: "metadata.name=demo",
+	})
+	if err != nil || !available || list == nil || len(list.Items) != 0 {
+		t.Fatalf("PodMetrics() = (%v, %v, %v), want available empty result", list, available, err)
+	}
+	if gotFields != "metadata.name=demo" {
+		t.Fatalf("metrics field selector = %q, want metadata.name=demo", gotFields)
+	}
+}

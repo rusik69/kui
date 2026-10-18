@@ -23,11 +23,25 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 
 ### Prebuilt release binaries
 
-GitHub releases provide one executable per platform: Linux x86_64/ARM64,
-macOS Intel/Apple silicon, and Windows x86_64. Download the matching binary
-directly; no archive extraction is required. The native webview still requires
-platform libraries: GTK 3 and WebKitGTK 4.0 on Linux, and the WebView2 runtime
-on Windows.
+GitHub releases publish these raw executable assets and matching SHA-256
+manifests:
+
+| Platform | Executable | Checksum manifest |
+| --- | --- | --- |
+| Linux x86_64 | `kui-linux-amd64` | `kui-linux-amd64.sha256` |
+| Linux ARM64 | `kui-linux-arm64` | `kui-linux-arm64.sha256` |
+| macOS Intel | `kui-darwin-amd64` | `kui-darwin-amd64.sha256` |
+| macOS Apple silicon | `kui-darwin-arm64` | `kui-darwin-arm64.sha256` |
+| Windows x86_64 | `kui-windows-amd64.exe` | `kui-windows-amd64.exe.sha256` |
+
+On Linux, verify with `sha256sum -c <manifest>`. On macOS, use
+`shasum -a 256 -c <manifest>`. On Windows, use
+`certutil -hashfile kui-windows-amd64.exe SHA256` and compare the result with
+the hash in the `.sha256` manifest.
+
+The native webview still requires platform dependencies: GTK 3 and WebKitGTK
+4.0 on Linux, and the WebView2 runtime on Windows. macOS uses the system
+WebKit webview; it needs no separately installed webview runtime.
 
 ## What it does
 
@@ -119,6 +133,25 @@ probes the Kubernetes API.
   `--debug-image`) instead.
 - Multi-user auth / in-cluster deployment — this is a local, single-user tool
   that trusts whatever your kubeconfig already grants.
+
+## Contributing
+
+Install the Go version declared in `go.mod`. Building, testing, and vetting
+`cmd/kui` requires cgo and the native webview development libraries: GTK 3 and
+WebKitGTK 4.0 development packages on Linux (`libgtk-3-dev` and
+`libwebkit2gtk-4.0-dev` on Ubuntu); use the platform's webview development
+dependencies on macOS and Windows. No Node/npm toolchain is needed.
+
+Canonical verification commands:
+
+```sh
+make ci
+make test
+```
+
+`make ci` runs formatting checks, `go vet`, lint, race-enabled tests with
+`coverage.out`, and a build. `make test` runs only the race-enabled tests and
+regenerates the Go coverage profile.
 
 ## Stack
 

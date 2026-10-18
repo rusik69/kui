@@ -11,7 +11,11 @@ import (
 
 // PodMetrics returns per-pod usage. Missing metrics-server APIs are reported as unavailable;
 // other request failures are returned for callers to surface.
-func PodMetrics(ctx context.Context, c *Clients, namespace string) (*metricsv1beta1.PodMetricsList, bool, error) {
+func PodMetrics(ctx context.Context, c *Clients, namespace string, options ...metav1.ListOptions) (*metricsv1beta1.PodMetricsList, bool, error) {
+	var opts metav1.ListOptions
+	if len(options) != 0 {
+		opts = options[0]
+	}
 	if c.Metrics == nil {
 		return nil, false, nil
 	}
@@ -20,9 +24,9 @@ func PodMetrics(ctx context.Context, c *Clients, namespace string) (*metricsv1be
 		err  error
 	)
 	if namespace != "" && namespace != "_all" {
-		list, err = c.Metrics.MetricsV1beta1().PodMetricses(namespace).List(ctx, metav1.ListOptions{})
+		list, err = c.Metrics.MetricsV1beta1().PodMetricses(namespace).List(ctx, opts)
 	} else {
-		list, err = c.Metrics.MetricsV1beta1().PodMetricses(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+		list, err = c.Metrics.MetricsV1beta1().PodMetricses(metav1.NamespaceAll).List(ctx, opts)
 	}
 	if err != nil {
 		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {

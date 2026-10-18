@@ -46,21 +46,26 @@ func Exec(ctx context.Context, c *Clients, namespace, pod string, opts ExecOptio
 		Stdout:            opts.Stdout,
 		Stderr:            opts.Stderr,
 		Tty:               opts.TTY,
-		TerminalSizeQueue: &fixedSizeQueue{ch: opts.Resize},
+		TerminalSizeQueue: &fixedSizeQueue{ctx: ctx, ch: opts.Resize},
 	})
 }
 
 type fixedSizeQueue struct {
-	ch <-chan remotecommand.TerminalSize
+	ctx context.Context
+	ch  <-chan remotecommand.TerminalSize
 }
 
 func (q *fixedSizeQueue) Next() *remotecommand.TerminalSize {
 	if q.ch == nil {
 		return nil
 	}
-	size, ok := <-q.ch
-	if !ok {
+	select {
+	case <-q.ctx.Done():
 		return nil
+	case size, ok := <-q.ch:
+		if !ok {
+			return nil
+		}
+		return &size
 	}
-	return &size
 }

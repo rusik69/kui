@@ -26,3 +26,19 @@ jobs:
 
       - name: ci
         run: make ci
+      - name: Summarize package coverage
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            go tool cover -func=coverage.out > coverage.txt
+          fi
+
+      - name: Publish package coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-coverage
+          path: |
+            coverage.out
+            coverage.txt
+          if-no-files-found: warn

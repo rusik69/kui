@@ -72,3 +72,43 @@ func TestBulkYAMLExportRejectsInvalidSelections(t *testing.T) {
 		})
 	}
 }
+func TestBulkYAMLExportRejectsTooManySelectionsBeforeResolvingManager(t *testing.T) {
+	paths := make([]string, maxYAMLBundleObjects+1)
+	for i := range paths {
+		paths[i] = "/c/context/team/pods/pod"
+	}
+	body := `{"paths":["` + strings.Join(paths, `","`) + `"]}`
+	request := httptest.NewRequest("POST", "/c/context/bulk-yaml", strings.NewReader(body))
+	request.SetPathValue("ctx", "context")
+	response := httptest.NewRecorder()
+	(&Server{}).handleBulkYAMLExport(response, request)
+	if response.Code != 400 {
+		t.Fatalf("status = %d, body = %q; expected rejection without a configured manager", response.Code, response.Body.String())
+	}
+}
+
+func TestBuildSelectedYAMLBundleRejectsOversizedSerializedObjectWithoutPartialBundle(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata": map[string]any{
+			"name": "large", "namespace": "team",
+		},
+		"data": map[string]any{
+			"payload": strings.Repeat("x", maxYAMLBundleBytes),
+		},
+	}}
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+	clients := &k8s.Clients{Dynamic: client}
+	paths := []metadataPath{
+		{path: "/c/context/team/pods/large", ns: "team", resource: "pods", name: "large"},
+	}
+
+	bundle, err := buildSelectedYAMLBundle(context.Background(), clients, paths)
+	if err != errYAMLBundleTooLarge {
+		t.Fatalf("error = %v, want %v", err, errYAMLBundleTooLarge)
+	}
+	if bundle != nil {
+		t.Fatalf("oversized bundle = %d bytes, want no partial bundle", len(bundle))
+	}
+}

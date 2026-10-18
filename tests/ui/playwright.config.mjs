@@ -20,7 +20,7 @@ export default defineConfig({
   expect: { timeout: 8000 },
   use: {
     launchOptions: process.env.KUI_CHROMIUM_EXECUTABLE ? { executablePath: process.env.KUI_CHROMIUM_EXECUTABLE } : {},
-    browserName: "chromium",
+    browserName: process.env.KUI_BROWSER || "chromium",
     viewport: { width: 1440, height: 1000 },
     locale: "en-US",
     timezoneId: "UTC",

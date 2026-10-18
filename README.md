@@ -24,7 +24,8 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 ### Prebuilt release binaries
 
 GitHub releases publish these raw executable assets and matching SHA-256
-manifests:
+manifests. Releases produced by the updated workflow also include an SPDX SBOM
+(`kui.spdx.json`):
 
 | Platform | Executable | Checksum manifest |
 | --- | --- | --- |
@@ -38,6 +39,17 @@ On Linux, verify with `sha256sum -c <manifest>`. On macOS, use
 `shasum -a 256 -c <manifest>`. On Windows, use
 `certutil -hashfile kui-windows-amd64.exe SHA256` and compare the result with
 the hash in the `.sha256` manifest.
+
+Releases produced by the updated workflow include signed build-provenance and
+SBOM attestations. Verify an executable from one of those releases with
+GitHub CLI:
+
+```sh
+gh attestation verify kui-linux-amd64 --repo rusik69/kui
+```
+
+The release workflow smoke-tests each executable's CLI and health endpoints
+before publishing the binaries.
 
 The native webview still requires platform dependencies: GTK 3 and WebKitGTK
 4.0 on Linux, and the WebView2 runtime on Windows. macOS uses the system

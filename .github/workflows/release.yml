@@ -35,11 +35,11 @@ jobs:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
       CGO_ENABLED: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
 
@@ -58,9 +58,62 @@ jobs:
           else
             shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
           fi
-
+      - name: Smoke-test executable and health endpoints
+        shell: bash
+        run: |
+          tmp_dir=$(mktemp -d)
+          server_pid=""
+          cleanup() {
+            if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid" 2>/dev/null || true
+              wait "$server_pid" 2>/dev/null || true
+            fi
+            rm -rf "$tmp_dir"
+          }
+          trap cleanup EXIT
+          cat > "$tmp_dir/kubeconfig" <<'EOF'
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: release-smoke
+              cluster:
+                server: http://127.0.0.1:9
+          contexts:
+            - name: release-smoke
+              context:
+                cluster: release-smoke
+                user: release-smoke
+          current-context: release-smoke
+          users:
+            - name: release-smoke
+              user: {}
+          EOF
+          "./${{ matrix.asset }}" --headless --addr 127.0.0.1:0 --kubeconfig "$tmp_dir/kubeconfig" >"$tmp_dir/server.log" 2>&1 &
+          server_pid=$!
+          listen_url=""
+          for _ in {1..100}; do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$tmp_dir/server.log"
+              exit 1
+            fi
+            if line=$(grep -m1 '^kui listening on http://' "$tmp_dir/server.log"); then
+              listen_url=${line#kui listening on }
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ -z "$listen_url" ]]; then
+            cat "$tmp_dir/server.log"
+            echo "kui did not start its HTTP server" >&2
+            exit 1
+          fi
+          health=$(curl --fail --silent --show-error --max-time 5 "$listen_url/healthz")
+          [[ "$health" == "ok" ]]
+          ready=$(curl --fail --silent --show-error --max-time 5 "$listen_url/readyz")
+          [[ "$ready" == "ready: release-smoke" ]]
+          printf 'Smoke-tested %s: %s, %s\n' "${{ matrix.asset }}" "$health" "$ready"
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ matrix.asset }}
           path: |
@@ -73,11 +126,15 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     permissions:
+      actions: read
+      attestations: write
+      artifact-metadata: write
       contents: write
+      id-token: write
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
           fetch-depth: 0
@@ -88,7 +145,7 @@ jobs:
           test -n "$RELEASE_TAG"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: dist
           merge-multiple: true
@@ -110,8 +167,38 @@ jobs:
             sha256sum --check "$asset.sha256"
           done
           test "$(find . -maxdepth 1 -type f | wc -l)" -eq "$(( ${#expected[@]} * 2 ))"
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/kui.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
-      - name: Publish all release assets
+      - name: Attest release binaries with build provenance
+        uses: actions/attest@v4.2.2
+        with:
+          subject-path: |
+            dist/kui-linux-amd64
+            dist/kui-linux-arm64
+            dist/kui-darwin-amd64
+            dist/kui-darwin-arm64
+            dist/kui-windows-amd64.exe
+
+      - name: Attest the SBOM for the release binaries
+        uses: actions/attest@v4.2.2
+        with:
+          subject-path: |
+            dist/kui-linux-amd64
+            dist/kui-linux-arm64
+            dist/kui-darwin-amd64
+            dist/kui-darwin-arm64
+            dist/kui-windows-amd64.exe
+          sbom-path: dist/kui.spdx.json
+
+
+      - name: Publish binaries, checksums, and SBOM
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash

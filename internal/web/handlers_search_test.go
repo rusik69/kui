@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"net/http/httptest"
 	"os"
@@ -126,6 +127,38 @@ func TestSearchObjectsFiltersAndCountsBeyondCaps(t *testing.T) {
 	}
 	if got[0].ListURL != "/c/myctx/team%20a/pods" {
 		t.Fatalf("result destination lost namespace scope or safe path escaping: %q", got[0].ListURL)
+	}
+}
+
+func BenchmarkSearchObjectsFiltered10kPods(b *testing.B) {
+	podsRK, _ := k8s.ByName("pods")
+	items := make([]unstructured.Unstructured, 10_000)
+	for i := range items {
+		name := fmt.Sprintf("pod-%05d", i)
+		if i%2 == 0 {
+			name = "match-" + name
+		}
+		items[i] = namedObject("Pod", name, "benchmark")
+	}
+	results := []k8s.KindResult{{
+		Kind: podsRK,
+		List: &unstructured.UnstructuredList{Items: items},
+	}}
+	query := searchQualifier{Name: "match"}
+	const wantCount = 5_000
+	wantVisible := min(wantCount, searchObjectCap, searchObjectPerKindCap)
+	got, count := searchObjectsFiltered(results, "benchmark", query)
+	if count != wantCount || len(got) != wantVisible {
+		b.Fatalf("search returned %d results, count %d; want %d results, count %d", len(got), count, wantVisible, wantCount)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		got, count = searchObjectsFiltered(results, "benchmark", query)
+		if count != wantCount || len(got) != wantVisible {
+			b.Fatalf("search returned %d results, count %d; want %d results, count %d", len(got), count, wantVisible, wantCount)
+		}
 	}
 }
 

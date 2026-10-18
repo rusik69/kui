@@ -170,6 +170,74 @@ users:
 	}
 }
 
+func TestNodeDebugShellAPIForbiddenDoesNotRenderSession(t *testing.T) {
+	createRequests := 0
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/ops/pods" {
+			_, _ = fmt.Fprint(w, `{"apiVersion":"v1","kind":"PodList","items":[]}`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/ops/pods" {
+			createRequests++
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"pods is forbidden","reason":"Forbidden","code":403}`)
+			return
+		}
+		http.Error(w, "unexpected Kubernetes API request: "+r.Method+" "+r.URL.String(), http.StatusNotFound)
+	}))
+	defer apiServer.Close()
+
+	config := fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: %q
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+current-context: test
+users:
+- name: test
+  user: {}
+`, apiServer.URL)
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(k8s.NewManager(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "http://kui.example/c/"+encodeCtx("test")+"/ops/nodes/worker-1/debug-shell", nil)
+	req.Header.Set("Origin", "http://kui.example")
+	req.Header.Set("X-Kui-CSRF", server.csrfToken)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("node shell status = %d, want %d: %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+	if createRequests != 1 {
+		t.Fatalf("Kubernetes pod create requests = %d, want exactly 1; handler response: %s", createRequests, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "forbidden") {
+		t.Fatalf("node shell denial did not preserve the API error: %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "term-pane") || strings.Contains(recorder.Body.String(), "Node shell") {
+		t.Fatalf("denied request rendered a shell session: %s", recorder.Body.String())
+	}
+	for _, header := range []string{"HX-Redirect", "HX-Retarget", "HX-Reswap"} {
+		if got := recorder.Header().Get(header); got != "" {
+			t.Errorf("denied request changed the selected view with %s: %q", header, got)
+		}
+	}
+}
+
 func TestNodeDebugShellRequiresConcreteNamespace(t *testing.T) {
 	for _, namespace := range []string{"_all", "_", ""} {
 		t.Run(namespace, func(t *testing.T) {

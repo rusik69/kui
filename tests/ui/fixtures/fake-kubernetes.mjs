@@ -248,7 +248,7 @@ function requestResource(pathname) {
 
 export async function startFakeKubernetes() {
   const objects = initialObjects();
-  const controls = { failNextLog: false };
+  const controls = { failNextLog: false, closeNextWatch: false };
   const requests = [];
   const watches = { started: 0, closed: 0 };
   const server = createServer(async (request, response) => {
@@ -304,6 +304,8 @@ export async function startFakeKubernetes() {
 
     if (url.searchParams.get("watch") === "true" && request.method === "GET") {
       watches.started++;
+      const closeImmediately = controls.closeNextWatch;
+      controls.closeNextWatch = false;
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
       const item = (objects[resource] || []).find((candidate) => !namespace || candidate.metadata.namespace === namespace);
       if (item) response.write(`${JSON.stringify({ type: "ADDED", object: item })}\n`);
@@ -314,6 +316,7 @@ export async function startFakeKubernetes() {
           watches.closed++;
         }
       });
+      if (closeImmediately) setImmediate(() => response.destroy());
       return;
     }
 

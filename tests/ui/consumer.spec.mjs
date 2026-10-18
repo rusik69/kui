@@ -10,7 +10,32 @@ async function openDetail(page, resource, name) {
   const row = page.locator(`#list-pane #kui-table tbody tr[data-name="${name}"]`);
   await expect(row).toBeVisible();
   await row.focus();
+  const detailPath = await row.getAttribute("data-id");
+  if (!detailPath) throw new Error(`${resource} row ${name} has no detail path`);
+  const requests = [];
+  const onRequest = (request) => {
+    const url = new URL(request.url());
+    if (url.origin === new URL(page.url()).origin && url.pathname.startsWith("/c/")) {
+      requests.push(`${request.method()} ${url.pathname}`);
+    }
+  };
+  page.on("request", onRequest);
+  const responsePromise = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === detailPath,
+    { timeout: 10_000 },
+  );
   await row.press("Enter");
+  let response;
+  try {
+    response = await responsePromise;
+  } catch (error) {
+    throw new Error(`Opening ${resource} ${name} timed out at ${page.url()}; requests: ${requests.join(", ")}; ${error.message}`);
+  } finally {
+    page.off("request", onRequest);
+  }
+  if (!response.ok()) {
+    throw new Error(`Opening ${resource} ${name} returned ${response.status()}: ${await response.text()}`);
+  }
   await expect(page.locator("#detail-pane .detail-header strong")).toHaveText(name);
   return row;
 }
@@ -21,6 +46,42 @@ async function lastMutation(api, pathFragment) {
 
 test.beforeEach(async ({ app, page }) => {
   await page.goto(app.url);
+  await expect(page.locator("#content")).toContainText("Cluster Overview");
+});
+
+test("switching context discards pending detail and search responses", async ({ page }) => {
+  await openResource(page, "pods");
+  let startDetail;
+  let startSearch;
+  const detailStarted = new Promise((resolve) => { startDetail = resolve; });
+  const searchStarted = new Promise((resolve) => { startSearch = resolve; });
+  await page.route("**/c/**/pods/alpha", async (route) => {
+    startDetail();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue().catch(() => {});
+  });
+  await page.route("**/c/**/search?*", async (route) => {
+    startSearch();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue().catch(() => {});
+  });
+
+  await page.locator('#kui-table tbody tr[data-name="alpha"]').click();
+  await detailStarted;
+  await page.getByRole("button", { name: "Open search" }).click();
+  await page.locator("#palette-input").fill("kind:Pod");
+  await searchStarted;
+
+  const contextSelect = page.locator("#context-select");
+  const alternateContext = await contextSelect.locator("option").filter({ hasText: "ui-test-alt" }).getAttribute("value");
+  expect(alternateContext).toBeTruthy();
+  await contextSelect.selectOption(alternateContext);
+  await expect(page).toHaveURL(new RegExp(`/c/${alternateContext}$`));
+  await expect(page.locator("#content")).toContainText("Cluster Overview");
+  await expect(page.locator("#detail-pane .detail-header")).toHaveCount(0);
+
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await expect(page).toHaveURL(new RegExp(`/c/${alternateContext}$`));
   await expect(page.locator("#content")).toContainText("Cluster Overview");
 });
 
@@ -505,6 +566,8 @@ test("selected resources download as a deterministic multi-document YAML bundle"
   const button = page.locator("#bulk-yaml-export");
   await expect(button).toBeVisible();
   await expect(button).toBeEnabled();
+  await expect(button).toHaveAttribute("aria-description", /Secret data/);
+  await expect(button).toHaveAttribute("title", /100 resources and 8 MiB/);
   const downloadPromise = page.waitForEvent("download");
   await button.click();
   const download = await downloadPromise;
@@ -607,11 +670,14 @@ test("batch metadata previews and applies label and annotation add, update, and 
   await apply("annotations", "remove", "ui.example/description", "");
 });
 
-test("the Kubernetes watch stream closes after leaving the application", async ({ app, page }) => {
+test("the Kubernetes watch reconnects after disconnect and closes after leaving the application", async ({ app, page }) => {
+  app.api.controls.closeNextWatch = true;
   await openResource(page, "pods");
-  await expect.poll(() => app.api.watches.started).toBeGreaterThan(0);
-  await page.goto("about:blank");
+  await expect.poll(() => app.api.watches.started, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
   await expect.poll(() => app.api.watches.closed).toBeGreaterThan(0);
+  await expect(page.locator("#statusbar")).toHaveAttribute("data-watch-state", "connected");
+  await page.goto("about:blank");
+  await expect.poll(() => app.api.watches.closed).toBe(app.api.watches.started);
 });
 
 test("shortcut help is announced in a dialog and closes with focus restored", async ({ page }) => {

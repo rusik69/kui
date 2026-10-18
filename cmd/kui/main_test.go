@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	webview "github.com/webview/webview_go"
 
 	"github.com/rusik69/kui/internal/k8s"
 )
@@ -36,6 +39,45 @@ func TestSelectContext(t *testing.T) {
 				t.Errorf("selectContext() = %q, want dev", got)
 			}
 		})
+	}
+}
+
+type recordingDesktopWindow struct {
+	calls []string
+}
+
+func (w *recordingDesktopWindow) SetTitle(title string) {
+	w.calls = append(w.calls, "title:"+title)
+}
+
+func (w *recordingDesktopWindow) SetSize(width, height int, _ webview.Hint) {
+	w.calls = append(w.calls, fmt.Sprintf("size:%dx%d", width, height))
+}
+
+func (w *recordingDesktopWindow) Navigate(url string) {
+	w.calls = append(w.calls, "navigate:"+url)
+}
+
+func (w *recordingDesktopWindow) Run() {
+	w.calls = append(w.calls, "run")
+}
+
+func (w *recordingDesktopWindow) Destroy() {
+	w.calls = append(w.calls, "destroy")
+}
+
+func TestOpenDesktopWindowRunsAndDestroysNativeWindow(t *testing.T) {
+	window := &recordingDesktopWindow{}
+	openDesktopWindow(window, "http://127.0.0.1:4321")
+	want := []string{
+		"title:kui",
+		"size:1280x800",
+		"navigate:http://127.0.0.1:4321",
+		"run",
+		"destroy",
+	}
+	if got := fmt.Sprint(window.calls); got != fmt.Sprint(want) {
+		t.Fatalf("desktop window lifecycle = %s, want %s", got, want)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -83,5 +84,46 @@ func TestWatchForwardsSelectorsResourceVersionAndErrorEvents(t *testing.T) {
 	}
 	if gotFields.String() != "metadata.name=demo" || gotLabels.String() != "app=web" {
 		t.Fatalf("watch selectors = (%q, %q), want (metadata.name=demo, app=web)", gotFields.String(), gotLabels.String())
+	}
+}
+
+type stopObservedWatch struct {
+	watch.Interface
+	stopped chan struct{}
+}
+
+func (w *stopObservedWatch) Stop() {
+	w.Interface.Stop()
+	close(w.stopped)
+}
+
+func TestWatchCancellationStopsWatchAndClosesEvents(t *testing.T) {
+	pods, _ := ByName("pods")
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	fakeWatch := watch.NewFake()
+	observed := &stopObservedWatch{Interface: fakeWatch, stopped: make(chan struct{})}
+	client.PrependWatchReactor("pods", func(ktesting.Action) (bool, watch.Interface, error) {
+		return true, observed, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := Watch(ctx, &Clients{Dynamic: client}, pods, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+
+	select {
+	case <-observed.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("underlying watch was not stopped after context cancellation")
+	}
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("event channel remained open after context cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event channel was not closed promptly after context cancellation")
 	}
 }

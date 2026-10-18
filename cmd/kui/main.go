@@ -95,12 +95,7 @@ func run() int {
 			}
 		}
 	} else {
-		w := webview.New(false)
-		w.SetTitle("kui")
-		w.SetSize(1280, 800, webview.HintNone)
-		w.Navigate(url)
-		w.Run()
-		w.Destroy()
+		openDesktopWindow(webview.New(false), url)
 		select {
 		case err := <-serveErr:
 			if !errors.Is(err, http.ErrServerClosed) {
@@ -129,6 +124,22 @@ func run() int {
 	default:
 	}
 	return 0
+}
+
+type desktopWindow interface {
+	SetTitle(string)
+	SetSize(int, int, webview.Hint)
+	Navigate(string)
+	Run()
+	Destroy()
+}
+
+func openDesktopWindow(window desktopWindow, url string) {
+	window.SetTitle("kui")
+	window.SetSize(1280, 800, webview.HintNone)
+	window.Navigate(url)
+	window.Run()
+	window.Destroy()
 }
 
 func selectContext(mgr *k8s.Manager, override string) (string, error) {

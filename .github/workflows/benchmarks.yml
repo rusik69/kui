@@ -1,0 +1,35 @@
+name: Performance benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Repeatable benchmarks (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Collect ten benchmark samples
+        run: |
+          set -o pipefail
+          go test ./internal/web -run '^$' \
+            -bench 'Benchmark(BuildTableData10kPods|SearchObjectsFiltered10kPods|ListPaginatedAPIFixture|BuildTableDataPaginatedAPIFixture)$' \
+            -benchmem -benchtime=1s -count=10 | tee benchmark.txt
+      - name: Summarize repeated samples
+        run: go run golang.org/x/perf/cmd/benchstat@latest benchmark.txt | tee benchmark-summary.txt
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: benchmark-baseline-${{ github.run_number }}
+          path: |
+            benchmark.txt
+            benchmark-summary.txt
+          retention-days: 90
+          if-no-files-found: error

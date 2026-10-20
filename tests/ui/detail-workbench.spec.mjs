@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures/application.mjs";
+import { test, expect, openTableFilters } from "./fixtures/application.mjs";
 
 test.beforeEach(async ({ app, page }) => {
   await page.goto(app.url);
@@ -8,6 +8,7 @@ test.beforeEach(async ({ app, page }) => {
 async function openResource(page, resource) {
   await page.locator(`.sidebar-link[data-resource="${resource}"]`).click();
   await expect(page.locator("#list-pane #kui-table")).toBeVisible();
+  await openTableFilters(page);
 }
 
 async function openDetail(page, resource, name) {
@@ -20,6 +21,7 @@ async function openDetail(page, resource, name) {
 test("detail metadata identity, disclosure state, and escaped label selectors are usable", async ({ page }) => {
   await openResource(page, "pods");
   await openDetail(page, "pods", "alpha");
+  await expect(page.getByRole("button", { name: "Hide all secret values" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Resource identity" })).toContainText("uid-dev-alpha");
   await expect(page.getByRole("link", { name: "Open canonical resource detail in new tab" })).toHaveAttribute("target", "_blank");
   const metadata = page.locator('.pill-row[data-metadata-kind="labels"] button[data-key="app"]');
@@ -32,6 +34,7 @@ test("detail metadata identity, disclosure state, and escaped label selectors ar
   await annotation.click();
   await expect(page).toHaveURL(/rowFilter=owner%3Dui-test/);
   await expect(page.locator("#list-pane #kui-table tbody tr[data-id]")).not.toHaveCount(0);
+  await openTableFilters(page);
   // The annotation filter correctly hides alpha; clear it before opening that row again.
   await page.locator("#list-pane #row-filter").fill("");
   await openDetail(page, "pods", "alpha");

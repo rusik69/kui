@@ -117,3 +117,10 @@ current-context: ui-test
 });
 
 export { expect };
+
+export async function openTableFilters(page) {
+  const filters = page.locator("#list-pane .table-filter-panel");
+  if (!(await filters.count())) return null;
+  if (!(await filters.evaluate(element => element.open))) await filters.locator(":scope > summary").click();
+  return filters;
+}

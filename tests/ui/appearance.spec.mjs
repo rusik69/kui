@@ -40,7 +40,7 @@ test("system theme follows live OS changes and custom preference persists", asyn
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("kui-appearance-v1.json");
   const exported = JSON.parse(await readFile(await download.path(), "utf8"));
-  expect(exported).toEqual({ version: 1, theme: "light", accent: "#cc5500", fontScale: 1.1, spacing: "compact" });
+  expect(exported).toEqual({ version: 1, theme: "light", palette: "classic", accent: "#cc5500", fontScale: 1.1, spacing: "compact" });
   await page.reload();
   await installAppearance(page, "dark");
   const toggle = page.locator("#theme-toggle");
@@ -53,6 +53,61 @@ test("system theme follows live OS changes and custom preference persists", asyn
   await expect(toggle.locator("use")).toHaveAttribute("href", "#icon-moon");
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("kui.appearance.v1")).theme)).toBe("dark");
   await expect.poll(() => page.evaluate(() => localStorage.getItem("kui.theme"))).toBe("dark");
+});
+test("color palettes change surfaces, respect contrast mode, and persist", async ({ app, page }) => {
+  await page.goto(app.url);
+  await installAppearance(page, "dark");
+  const dialog = await openSettings(page);
+  const root = page.locator("html");
+  await dialog.locator("[name=theme]").selectOption("dark");
+  const palette = dialog.locator("[name=palette]");
+  const darkSurfaces = [];
+  for (const [name, surface, accent] of [["ocean", "#102334", "#38bdf8"], ["forest", "#17251d", "#4ade80"], ["sunset", "#2a1c22", "#fb7185"]]) {
+    await palette.selectOption(name);
+    await expect(root).toHaveAttribute("data-palette", name);
+    const colors = await root.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { surface: style.getPropertyValue("--bg-raised").trim(), accent: style.getPropertyValue("--accent").trim() };
+    });
+    expect(colors).toEqual({ surface, accent });
+    darkSurfaces.push(colors.surface);
+  }
+  expect(new Set(darkSurfaces).size).toBe(3);
+  await dialog.locator("[name=theme]").selectOption("light");
+  const lightSurfaces = [];
+  for (const [name, surface, accent] of [["ocean", "#eaf4fb", "#0369a1"], ["forest", "#edf5ef", "#166534"], ["sunset", "#fff0eb", "#9f1239"]]) {
+    await palette.selectOption(name);
+    const colors = await root.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { surface: style.getPropertyValue("--bg-raised").trim(), accent: style.getPropertyValue("--accent").trim() };
+    });
+    expect(colors).toEqual({ surface, accent });
+    lightSurfaces.push(colors.surface);
+  }
+  expect(new Set(lightSurfaces).size).toBe(3);
+  await palette.selectOption("forest");
+  await dialog.locator("[name=theme]").selectOption("high-contrast");
+  await expect(root).toHaveCSS("--bg-raised", "#080808");
+  await dialog.locator("[name=theme]").selectOption("dark");
+  await expect(root).toHaveCSS("--bg-raised", "#17251d");
+  await page.reload();
+  await expect(root).toHaveAttribute("data-palette", "forest");
+  await expect(root).toHaveAttribute("data-theme", "dark");
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("kui.appearance.v1")).palette)).toBe("forest");
+});
+
+test("version-one appearance imports without a palette retain the classic theme", async ({ app, page }) => {
+  await page.goto(app.url);
+  await installAppearance(page);
+  const dialog = await openSettings(page);
+  await dialog.locator("[name=palette]").selectOption("ocean");
+  await dialog.locator(".appearance-file").setInputFiles({
+    name: "classic-appearance.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ version: 1, theme: "light", accent: "#3b82f6", fontScale: 1, spacing: "comfortable" })),
+  });
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "classic");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
 test("invalid appearance import is atomic and reset requires confirmation", async ({ app, page }) => {

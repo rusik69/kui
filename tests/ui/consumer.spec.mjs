@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { test, expect } from "./fixtures/application.mjs";
+import { test, expect, openTableFilters } from "./fixtures/application.mjs";
 
 async function openResource(page, resource) {
   await page.locator(`.sidebar-link[data-resource="${resource}"]`).click();
   await expect(page.locator("#list-pane #kui-table")).toBeVisible();
+  await openTableFilters(page);
 }
 
 async function openDetail(page, resource, name) {
@@ -469,6 +470,7 @@ test("table workbench saves a filter and column layout, then compares distinct m
   await expect(savedViews).toContainText("Regression view");
   await page.locator("#list-pane #row-filter").fill("bravo");
   await savedViews.selectOption({ label: "Regression view" });
+  await openTableFilters(page);
   const visibleRows = page.locator("#list-pane #kui-table tbody tr[data-name]:visible");
   await expect(visibleRows).toHaveCount(1);
   await expect(visibleRows.first()).toHaveAttribute("data-name", "alpha");

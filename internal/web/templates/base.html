@@ -2,7 +2,19 @@
 <!doctype html>
 <html lang="en">
 <head>
-<script>document.documentElement.setAttribute('data-theme', localStorage.getItem('kui.theme') || 'dark')</script>
+<script>
+(() => {
+  const root = document.documentElement;
+  root.dataset.theme = "dark";
+  root.dataset.palette = "classic";
+  root.dataset.contrast = "normal";
+  try {
+    root.dataset.theme = localStorage.getItem("kui.theme") || "dark";
+    const appearance = JSON.parse(localStorage.getItem("kui.appearance.v1") || "null");
+    if (["classic", "ocean", "forest", "sunset"].includes(appearance?.palette)) root.dataset.palette = appearance.palette;
+  } catch (_) {}
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta charset="utf-8">
 <meta name="kui-csrf-token" content="{{.CSRFToken}}">

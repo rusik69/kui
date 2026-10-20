@@ -60,7 +60,6 @@
       <dt>Labels</dt><dd><div class="pill-row" data-metadata-kind="labels">{{range $k,$v := .Labels}}<button type="button" class="pill metadata-pill" data-key="{{$k}}" data-value="{{$v}}" title="{{$k}}={{$v}}" onclick="kui.applyMetadataPill(this)">{{$k}}<span class="pill-eq">=</span>{{$v}}</button>{{end}}</div><button type="button" class="btn" onclick="kui.copyMetadataJSON('labels')">Copy labels JSON</button></dd>
       <dt>Annotations</dt><dd><div class="pill-row" data-metadata-kind="annotations">{{range $k,$v := .Annotations}}<button type="button" class="pill metadata-pill" data-key="{{$k}}" data-value="{{$v}}" title="{{$k}}={{$v}}" onclick="kui.applyMetadataPill(this)">{{$k}}<span class="pill-eq">=</span>{{$v}}</button>{{end}}</div><button type="button" class="btn" onclick="kui.copyMetadataJSON('annotations')">Copy annotations JSON</button></dd>
     </dl>
-    <button type="button" class="btn" onclick="kui.hideAllSecrets()">Hide all secret values</button>
 
     {{if .Conditions}}
     <div class="section-title">Conditions</div>

@@ -3,8 +3,15 @@
 
 	const STORAGE_KEY = "kui.appearance.v1";
 	const MAX_IMPORT_BYTES = 8192;
-	const DEFAULTS = Object.freeze({ theme: "system", accent: "#3b82f6", fontScale: 1, spacing: "comfortable" });
+	const DEFAULTS = Object.freeze({ theme: "system", palette: "classic", accent: "auto", fontScale: 1, spacing: "comfortable" });
 	const themes = new Set(["system", "light", "dark", "high-contrast"]);
+	const palettes = new Set(["classic", "ocean", "forest", "sunset"]);
+	const paletteAccents = Object.freeze({
+		classic: { dark: "#3b82f6", light: "#3b82f6" },
+		ocean: { dark: "#38bdf8", light: "#0369a1" },
+		forest: { dark: "#4ade80", light: "#166534" },
+		sunset: { dark: "#fb7185", light: "#9f1239" },
+	});
 	const scales = new Set([0.9, 1, 1.1, 1.2]);
 	const spacings = new Set(["compact", "comfortable"]);
 	const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -13,6 +20,7 @@
 	let status;
 
 	function validAccent(value) {
+		if (value === "auto") return true;
 		if (typeof value !== "string" || !/^#[\da-f]{6}$/i.test(value)) return false;
 		const channels = [1, 3, 5].map((index) => parseInt(value.slice(index, index + 2), 16) / 255).map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
 		const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
@@ -22,9 +30,9 @@
 	function validate(value) {
 		if (!value || typeof value !== "object" || Array.isArray(value) || value.version !== 1) return null;
 		const keys = Object.keys(value);
-		if (keys.some((key) => !["version", "theme", "accent", "fontScale", "spacing"].includes(key))) return null;
-		if (!themes.has(value.theme) || !validAccent(value.accent) || !scales.has(value.fontScale) || !spacings.has(value.spacing)) return null;
-		return { theme: value.theme, accent: value.accent.toLowerCase(), fontScale: value.fontScale, spacing: value.spacing };
+		if (keys.some((key) => !["version", "theme", "palette", "accent", "fontScale", "spacing"].includes(key))) return null;
+		if (!themes.has(value.theme) || !palettes.has(value.palette ?? "classic") || !validAccent(value.accent) || !scales.has(value.fontScale) || !spacings.has(value.spacing)) return null;
+		return { theme: value.theme, palette: value.palette ?? "classic", accent: value.accent.toLowerCase(), fontScale: value.fontScale, spacing: value.spacing };
 	}
 
 	function load() {
@@ -51,14 +59,22 @@
 		return settings.theme === "high-contrast" ? "high-contrast" : settings.theme;
 	}
 
+	function effectiveAccent() {
+		if (settings.theme === "high-contrast") return "#ffff00";
+		if (settings.accent !== "auto") return settings.accent;
+		const theme = effectiveTheme();
+		return paletteAccents[settings.palette][theme === "light" ? "light" : "dark"];
+	}
+
 	function apply(persist = true) {
 		const root = document.documentElement;
 		const theme = effectiveTheme();
 		root.dataset.theme = theme;
+		root.dataset.palette = settings.palette;
 		root.dataset.appearanceMode = settings.theme;
 		root.dataset.contrast = settings.theme === "high-contrast" ? "high" : "normal";
 		root.dataset.spacing = settings.spacing;
-		root.style.setProperty("--accent", theme === "high-contrast" ? "#ff0" : settings.accent);
+		root.style.setProperty("--accent", theme === "high-contrast" ? "#ff0" : effectiveAccent());
 		root.style.setProperty("--appearance-font-scale", String(settings.fontScale));
 		root.style.setProperty("--appearance-spacing-scale", settings.spacing === "compact" ? "0.82" : "1");
 		try { localStorage.setItem("kui.theme", theme); } catch (_) { /* The current page still reflects the preference. */ }
@@ -93,7 +109,8 @@
 	function updateControls() {
 		if (!dialog) return;
 		dialog.querySelector("[name=theme]").value = settings.theme;
-		dialog.querySelector("[name=accent]").value = settings.accent;
+		dialog.querySelector("[name=palette]").value = settings.palette;
+		dialog.querySelector("[name=accent]").value = effectiveAccent();
 		dialog.querySelector("[name=fontScale]").value = String(settings.fontScale);
 		dialog.querySelector("[name=spacing]").value = settings.spacing;
 	}
@@ -116,6 +133,7 @@
 		dialog.innerHTML = `<form method="dialog" class="appearance-heading"><h2 id="appearance-title">Appearance preferences</h2><button type="submit" aria-label="Close appearance settings" data-tooltip="Close">×</button></form>
 			<div class="appearance-fields">
 				<label>Theme<select name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option><option value="high-contrast">High contrast</option></select></label>
+				<label>Color palette<select name="palette"><option value="classic">Classic</option><option value="ocean">Ocean</option><option value="forest">Forest</option><option value="sunset">Sunset</option></select></label>
 				<label>Accent color<input name="accent" type="color" aria-describedby="appearance-accent-help"><span id="appearance-accent-help">Choose a color with sufficient contrast for focus indicators.</span></label>
 				<label>Font size<select name="fontScale"><option value="0.9">Smaller</option><option value="1">Default</option><option value="1.1">Larger</option><option value="1.2">Largest</option></select></label>
 				<label>Global spacing<select name="spacing"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
@@ -127,7 +145,7 @@
 		button.addEventListener("click", () => { updateControls(); dialog.showModal(); dialog.querySelector("[name=theme]").focus(); });
 		dialog.addEventListener("change", (event) => {
 			const field = event.target;
-			if (!["theme", "accent", "fontScale", "spacing"].includes(field.name)) return;
+			if (!["theme", "palette", "accent", "fontScale", "spacing"].includes(field.name)) return;
 			const candidate = { ...settings, [field.name]: field.name === "fontScale" ? Number(field.value) : field.value };
 			if (field.name === "accent" && !validAccent(candidate.accent)) {
 				field.value = settings.accent;

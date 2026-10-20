@@ -366,3 +366,13 @@
   .kui-comparison-table .is-changed { outline: 2px solid Highlight; }
   .kui-column-resize::after { background: CanvasText; }
 }
+
+.kui-column-filter-panel { min-width: 0; }
+.kui-column-filter-panel > summary {
+  width: fit-content;
+  padding: 3px 2px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.kui-column-filter-panel[open] > summary { margin-bottom: 6px; }

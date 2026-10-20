@@ -81,9 +81,11 @@ WebKit webview; it needs no separately installed webview runtime.
   saved per browser, and resource navigation supports browser back/forward.
 
 - Open independent workspace tabs with pinned/closed-tab recovery, save scoped
-  searches, and export table data as JSON or TSV. Local preferences keep
-  workspace, query, table, and appearance state in the browser, scoped away from
-  Kubernetes credentials and object secrets.
+  searches, and export table data as JSON or TSV. Local browser preferences keep
+  workspace, query, and table state separate from appearance settings, which
+  offer system/light/dark/high-contrast modes, four color palettes, accent color,
+  font size, and spacing. These preferences stay separate from Kubernetes
+  credentials and object secrets.
 - Detail and YAML workbenches provide section controls, copyable identity,
   bounded draft revisions, diff navigation, log bookmarks/highlights, terminal
   controls, and port-forward session status. The overview adds refresh controls,

@@ -57,11 +57,16 @@
         <button type="button" class="btn" data-explorer="copy-tsv">Copy selected TSV</button>
         <span class="kui-explorer-counts" aria-live="polite"></span>
       </div>
-      <div class="kui-explorer-columns" aria-label="Per-column filters"></div>
+      <details class="kui-column-filter-panel">
+        <summary>Filter by column</summary>
+        <div class="kui-explorer-columns" aria-label="Per-column filters"></div>
+      </details>
       <ol class="kui-sort-priority" aria-label="Sort priority"></ol>
       <p id="kui-explorer-status" class="kui-explorer-status" role="status" aria-live="polite"></p>`;
+      const filterContent = $(".table-filter-content", pane);
       const workbench = $(".kui-workbench", pane);
-      (workbench || table.closest(".resource-table-wrap") || table).before(controls);
+      if (filterContent) filterContent.append(controls);
+      else (workbench || table.closest(".resource-table-wrap") || table).before(controls);
     }
     explorerState.pane = pane;
     explorerState.table = table;

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"fmt"
 
 	"k8s.io/client-go/discovery"
@@ -39,10 +40,9 @@ func (m *Manager) Clients(ctxName string) (*Clients, error) {
 		return c, nil
 	}
 
-	overrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(m.loadingRules, overrides).ClientConfig()
+	cfg, err := m.restConfigFor(ctxName)
 	if err != nil {
-		return nil, fmt.Errorf("load context %q: %w", ctxName, err)
+		return nil, err
 	}
 	// client-go's library default (QPS=5, Burst=10) is tuned for well-behaved
 	// controllers sharing an API server with many other clients — far too
@@ -83,4 +83,18 @@ func (m *Manager) Clients(ctxName string) (*Clients, error) {
 	}
 	m.clients[ctxName] = c
 	return c, nil
+}
+
+// restConfigFor builds the REST configuration for a context that either
+// lives in the kubeconfig file or was imported from Rancher.
+func (m *Manager) restConfigFor(ctxName string) (*rest.Config, error) {
+	if m.hasRancherContext(ctxName) {
+		return m.rancher.RestConfig(context.Background(), ctxName)
+	}
+	overrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(m.loadingRules, overrides).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load context %q: %w", ctxName, err)
+	}
+	return cfg, nil
 }

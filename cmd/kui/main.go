@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,9 @@ func run() int {
 	defaultContext := flags.String("context", "", "default kubeconfig context (defaults to current-context)")
 	defaultNamespace := flags.String("namespace", "", "default namespace (defaults to the selected context's namespace or all namespaces)")
 	accessLog := flags.Bool("access-log", false, "log HTTP requests (method, path, status, duration)")
+	rancherURL := flags.String("rancher-url", os.Getenv("KUI_RANCHER_URL"), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts")
+	rancherToken := flags.String("rancher-token", os.Getenv("KUI_RANCHER_TOKEN"), "Rancher API bearer token; prefer the KUI_RANCHER_TOKEN environment variable to keep the token out of the process list")
+	rancherInsecure := flags.Bool("rancher-insecure", false, "skip TLS verification for the Rancher server (self-signed certificates)")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -41,6 +45,17 @@ func run() int {
 	}
 
 	mgr := k8s.NewManager(*kubeconfig)
+	if strings.TrimSpace(*rancherURL) != "" {
+		source, err := k8s.NewRancherSource(*rancherURL, *rancherToken, *rancherInsecure)
+		if err != nil {
+			log.Printf("configure Rancher: %v", err)
+			return 1
+		}
+		if strings.TrimSpace(*rancherToken) == "" {
+			log.Printf("rancher-url set without a token; set --rancher-token or KUI_RANCHER_TOKEN to import clusters")
+		}
+		mgr.SetRancher(source)
+	}
 	contextName, err := selectContext(mgr, *defaultContext)
 	if err != nil {
 		log.Printf("load kubeconfig: %v", err)
@@ -156,6 +171,12 @@ func selectContext(mgr *k8s.Manager, override string) (string, error) {
 		selected = override
 	}
 	if selected == "" {
+		// No current-context (e.g. a Rancher-only setup with no kubeconfig
+		// defaults): fall back to the first available context, mirroring the
+		// web UI's fallback for a missing context.
+		if len(contexts) > 0 {
+			return contexts[0].Name, nil
+		}
 		return "", errors.New("kubeconfig has no current-context; specify --context")
 	}
 	for _, ctx := range contexts {

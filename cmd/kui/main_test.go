@@ -13,13 +13,16 @@ import (
 
 func TestSelectContext(t *testing.T) {
 	for _, tc := range []struct {
-		name, current, override string
-		wantErr                 bool
+		name, current, override, want string
+		wantErr                       bool
 	}{
-		{name: "missing current", wantErr: true},
 		{name: "explicit override without current", override: "dev"},
 		{name: "missing override", override: "absent", wantErr: true},
 		{name: "current context", current: "dev"},
+		{
+			name: "missing current falls back to first context",
+			want: "dev",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			config := "apiVersion: v1\nkind: Config\n"
@@ -35,8 +38,12 @@ func TestSelectContext(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("selectContext() error = %v, wantErr %v", err, tc.wantErr)
 			}
-			if err == nil && got != "dev" {
-				t.Errorf("selectContext() = %q, want dev", got)
+			want := tc.want
+			if want == "" && err == nil {
+				want = "dev"
+			}
+			if err == nil && got != want {
+				t.Errorf("selectContext() = %q, want %q", got, want)
 			}
 		})
 	}

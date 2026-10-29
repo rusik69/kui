@@ -3,7 +3,8 @@
 A lightweight, local Kubernetes web UI — browse, tail logs, exec into pods,
 edit/delete resources and port-forward, all from one small Go binary.
 
-Reads `~/.kube/config` like `kubectl`/`k9s`/Lens — no in-cluster install,
+Reads `~/.kube/config` like `kubectl`/`k9s`/Lens — or a whole directory of
+kubeconfig files (`--kubeconfig /path/to/dir`) — no in-cluster install,
 no separate auth. Can additionally import cluster kubeconfigs from a
 Rancher management server (see below).
 
@@ -15,7 +16,7 @@ go run ./cmd/kui
 
 Open the printed `http://127.0.0.1:<port>` URL. Flags:
 
-- `--kubeconfig` path to kubeconfig (defaults to `$KUBECONFIG` / `~/.kube/config`)
+- `--kubeconfig` path to a kubeconfig file **or a directory** of kubeconfig files (`*.yaml`, `*.yml`, `*.json`; hidden files ignored; defaults to `$KUBECONFIG` / `~/.kube/config`). A directory is re-scanned live — files can be added, edited, or removed while kui runs
 - `--addr` TCP listen address (default `127.0.0.1:0`, loopback/free port; external binds require network protections)
 - `--context` and `--namespace` override the initial kubeconfig defaults
 - `--rancher-url` import cluster kubeconfigs from a Rancher management server (or set `KUI_RANCHER_URL`; can also be configured in the UI via the top-bar gear button)

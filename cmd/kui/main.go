@@ -29,7 +29,7 @@ func main() {
 func run() int {
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	kubeconfig := flags.String("kubeconfig", "", "path to kubeconfig (defaults to $KUBECONFIG or ~/.kube/config)")
+	kubeconfig := flags.String("kubeconfig", "", "path to a kubeconfig file or a directory of kubeconfig files (*.yaml, *.yml, *.json; defaults to $KUBECONFIG or ~/.kube/config)")
 	addr := flags.String("addr", "127.0.0.1:0", "listen address (default loopback; use an explicit external address to expose beyond this machine)")
 	headless := flags.Bool("headless", false, "run as a plain HTTP server instead of opening a native window (for remote/SSH use)")
 	debugImage := flags.String("debug-image", k8s.DebugPodShellImage, "container image for ephemeral debug shells")

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ type ContextInfo struct {
 // or removed at runtime (see SetRancher).
 type Manager struct {
 	loadingRules      *clientcmd.ClientConfigLoadingRules
+	kubeconfigPath    string // as given: a file, a directory, or ""
 	sourceMu          sync.RWMutex
 	rancher           *RancherSource
 	mu                sync.RWMutex
@@ -35,16 +37,48 @@ type Manager struct {
 }
 
 // NewManager builds a Manager from the given kubeconfig path (empty string
-// means use the default loading rules / KUBECONFIG env var).
+// means use the default loading rules / KUBECONFIG env var). If the path is
+// a directory, all kubeconfig files in it (*.yaml, *.yml, *.json, ignoring
+// hidden files) are loaded and merged; the directory is re-scanned on every
+// context query so files can be added, edited, or removed while kui runs.
 func NewManager(kubeconfigPath string) *Manager {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfigPath != "" {
-		rules.ExplicitPath = kubeconfigPath
+		if fi, err := os.Stat(kubeconfigPath); err == nil && fi.IsDir() {
+			rules.Precedence = kubeconfigPaths(kubeconfigPath)
+		} else {
+			rules.ExplicitPath = kubeconfigPath
+		}
 	}
 	return &Manager{
-		loadingRules: rules,
-		clients:      make(map[string]*Clients),
+		loadingRules:   rules,
+		kubeconfigPath: kubeconfigPath,
+		clients:        make(map[string]*Clients),
 	}
+}
+
+// kubeconfigPaths returns the sorted list of kubeconfig files inside dir
+// (*.yaml, *.yml, *.json, ignoring hidden and non-regular files). Sorted so
+// merge precedence is deterministic (client-go: first file wins on map-key
+// conflicts).
+func kubeconfigPaths(dir string) []string {
+	var paths []string
+	for _, pattern := range []string{"*.yaml", "*.yml", "*.json"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
+		paths = append(paths, matches...)
+	}
+	sort.Strings(paths)
+	out := paths[:0]
+	for _, p := range paths {
+		if strings.HasPrefix(filepath.Base(p), ".") {
+			continue
+		}
+		if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // SetRancher attaches a Rancher source whose clusters appear as extra
@@ -67,19 +101,40 @@ func (m *Manager) Rancher() *RancherSource {
 
 // refreshIfKubeconfigChanged drops clients built from stale cluster, user,
 // or context data — including stale Rancher imports. Context queries still
-// load the source file on each call.
+// load the source file(s) on each call.
 func (m *Manager) refreshIfKubeconfigChanged() {
 	hash := sha256.New()
-	for _, path := range m.loadingRules.GetLoadingPrecedence() {
-		_, _ = hash.Write([]byte(path))
+	// Directory mode: re-expand the directory on every check so files added
+	// or removed while kui runs are picked up (and invalidate cached
+	// clients). File mode fingerprints the explicit path.
+	if fi, err := os.Stat(m.kubeconfigPath); err == nil && fi.IsDir() {
+		paths := kubeconfigPaths(m.kubeconfigPath)
+		_, _ = hash.Write([]byte("dir:" + m.kubeconfigPath))
 		_, _ = hash.Write([]byte{0})
-		content, err := os.ReadFile(path)
-		if err != nil {
-			_, _ = hash.Write([]byte(err.Error()))
-		} else {
-			_, _ = hash.Write(content)
+		for _, path := range paths {
+			_, _ = hash.Write([]byte(path))
+			_, _ = hash.Write([]byte{0})
+			content, err := os.ReadFile(path)
+			if err != nil {
+				_, _ = hash.Write([]byte(err.Error()))
+			} else {
+				_, _ = hash.Write(content)
+			}
+			_, _ = hash.Write([]byte{0})
 		}
-		_, _ = hash.Write([]byte{0})
+		m.loadingRules.Precedence = paths
+	} else {
+		for _, path := range m.loadingRules.GetLoadingPrecedence() {
+			_, _ = hash.Write([]byte(path))
+			_, _ = hash.Write([]byte{0})
+			content, err := os.ReadFile(path)
+			if err != nil {
+				_, _ = hash.Write([]byte(err.Error()))
+			} else {
+				_, _ = hash.Write(content)
+			}
+			_, _ = hash.Write([]byte{0})
+		}
 	}
 	if m.Rancher() != nil {
 		_, _ = hash.Write([]byte("rancher"))
@@ -130,7 +185,7 @@ func (m *Manager) ListContexts() ([]ContextInfo, error) {
 	return out, nil
 }
 
-// loadFileConfig loads the kubeconfig file without Rancher imports.
+// loadFileConfig loads the kubeconfig file(s) without Rancher imports.
 func (m *Manager) loadFileConfig() (*clientcmdapi.Config, error) {
 	return m.loadingRules.Load()
 }

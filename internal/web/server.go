@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"github.com/rusik69/kui/internal/k8s"
+	"github.com/rusik69/kui/internal/settings"
 )
 
 //go:embed templates
@@ -34,16 +35,18 @@ var templateBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 // Server holds the shared state for every HTTP handler.
 type Server struct {
-	mgr              *k8s.Manager
-	forwards         *k8s.ForwardManager
-	tmpl             *template.Template
-	mux              *http.ServeMux
-	csrfToken        string
-	debugImage       string
-	defaultContext   string
-	defaultNamespace string
-	rancherMu        sync.Mutex
-	rancherToken     string // in-memory only; write-only from the UI's perspective
+	mgr               *k8s.Manager
+	forwards          *k8s.ForwardManager
+	tmpl              *template.Template
+	mux               *http.ServeMux
+	csrfToken         string
+	debugImage        string
+	defaultContext    string
+	defaultNamespace  string
+	rancherMu         sync.RWMutex
+	rancherToken      string // in-memory only token for the active source
+	rancherSourceKind string // "flags", "file", or "" — where the active settings came from
+	settingsStore     *settings.Store
 }
 
 // New builds a Server with routes registered and templates parsed.
@@ -126,12 +129,13 @@ func New(mgr *k8s.Manager) (*Server, error) {
 	csrfToken := base64.RawURLEncoding.EncodeToString(tokenBytes)
 
 	s := &Server{
-		mgr:        mgr,
-		forwards:   k8s.NewForwardManager(),
-		tmpl:       tmpl,
-		mux:        http.NewServeMux(),
-		csrfToken:  csrfToken,
-		debugImage: k8s.DebugPodShellImage,
+		mgr:           mgr,
+		forwards:      k8s.NewForwardManager(),
+		tmpl:          tmpl,
+		mux:           http.NewServeMux(),
+		csrfToken:     csrfToken,
+		debugImage:    k8s.DebugPodShellImage,
+		settingsStore: settings.DefaultStoreOrNoop(),
 	}
 	s.routes()
 	return s, nil
@@ -157,6 +161,18 @@ func (s *Server) SetRancherToken(token string) {
 	s.rancherMu.Lock()
 	s.rancherToken = token
 	s.rancherMu.Unlock()
+}
+
+// InitRancher restores a Rancher connection persisted in the settings file
+// (user config dir) unless CLI flags already configured one. Call once at
+// startup, after SetRancherToken.
+func (s *Server) InitRancher(flagConfigured bool) {
+	s.rancherMu.Lock()
+	if flagConfigured && s.mgr.Rancher() != nil {
+		s.rancherSourceKind = "flags"
+	}
+	s.rancherMu.Unlock()
+	s.initRancher(flagConfigured)
 }
 
 func (s *Server) Close() {

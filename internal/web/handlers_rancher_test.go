@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/rusik69/kui/internal/k8s"
+	"github.com/rusik69/kui/internal/settings"
 )
 
 // fakeRancherWeb is a minimal Rancher server for handler tests: it answers
@@ -79,6 +80,8 @@ users:
 
 func rancherTestServer(t *testing.T) (*Server, *fakeRancherWeb) {
 	t.Helper()
+	// Isolate the settings file from the developer's real config directory.
+	t.Setenv("KUI_CONFIG_DIR", filepath.Join(t.TempDir(), "settings"))
 	config := `apiVersion: v1
 kind: Config
 current-context: dev
@@ -287,17 +290,146 @@ func TestRancherEndpointsRequireCSRF(t *testing.T) {
 	}
 }
 
+// TestRancherSettingsPersistAcrossRestart saves through the API, then builds
+// a fresh Server over the same config dir (simulating a restart) and checks
+// the connection was restored.
+func TestRancherSettingsPersistAcrossRestart(t *testing.T) {
+	server, fake := rancherTestServer(t)
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		URL:   fake.server.URL,
+		Token: "web-token",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// "Restart": a new Server over the same settings directory.
+	restored, err := New(server.mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.initRancher(false)
+	if restored.mgr.Rancher() == nil {
+		t.Fatal("persisted Rancher connection was not restored on restart")
+	}
+	restored.SetRancherToken("web-token")
+
+	contexts, err := restored.mgr.ListContexts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ctx := range contexts {
+		if ctx.Name == k8s.RancherContextPrefix+"web" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("restored contexts missing rancher/web: %+v", contexts)
+	}
+
+	statusRec := rancherRequest(t, restored, http.MethodGet, "/rancher", nil)
+	var status rancherSettingsResponse
+	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Configured || status.Source != "file" || !status.Persist {
+		t.Fatalf("restored status = %+v, want configured from file", status)
+	}
+	if _, err := restored.mgr.Clients(k8s.RancherContextPrefix + "web"); err != nil {
+		t.Fatalf("clients after restart: %v", err)
+	}
+}
+
+// TestRancherFlagsTakePrecedenceOverFile verifies a flag-configured source
+// wins at startup and the persisted entry stays on disk untouched.
+func TestRancherFlagsTakePrecedenceOverFile(t *testing.T) {
+	server, fake := rancherTestServer(t)
+	// Persist one connection.
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		URL:   fake.server.URL,
+		Token: "web-token",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// A flag-configured server must NOT activate the persisted entry.
+	flagServer, err := New(server.mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagServer.SetRancherToken("flag-token")
+	flagSource, err := k8s.NewRancherSource("https://flag.example.com", "flag-token", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flagServer.mgr.SetRancher(flagSource)
+	flagServer.InitRancher(true)
+
+	kind := flagServer.rancherSourceKind
+	if kind != "flags" {
+		t.Fatalf("source kind = %q, want flags", kind)
+	}
+	// The file entry survives untouched.
+	if got := server.settingsStore.Rancher(); got == nil || got.Token != "web-token" {
+		t.Fatalf("persisted entry disturbed by flags: %+v", got)
+	}
+}
+
+// TestRancherRemoveClearsPersistedFile verifies disconnect also clears the
+// settings file, so nothing reconnects on the next start.
+func TestRancherRemoveClearsPersistedFile(t *testing.T) {
+	server, fake := rancherTestServer(t)
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		URL:   fake.server.URL,
+		Token: "web-token",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := rancherRequest(t, server, http.MethodDelete, "/rancher", nil); rec.Code != http.StatusOK {
+		t.Fatalf("remove = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := server.settingsStore.Rancher(); got != nil {
+		t.Fatalf("persisted entry survived remove: %+v", got)
+	}
+	restored, err := New(server.mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.initRancher(false)
+	if restored.mgr.Rancher() != nil {
+		t.Fatal("removed connection reconnected on restart")
+	}
+}
+
+// TestRancherSaveReportsFailedPersist verifies the save endpoint fails loudly
+// when the settings file cannot be written, instead of claiming success.
+func TestRancherSaveReportsFailedPersist(t *testing.T) {
+	server, fake := rancherTestServer(t)
+	// Make the settings directory unwritable.
+	if err := os.Chmod(filepath.Dir(server.settingsStore.Path()), 0o500); err != nil {
+		t.Skipf("cannot simulate read-only dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(server.settingsStore.Path()), 0o700) })
+	rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		URL:   fake.server.URL,
+		Token: "web-token",
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("save = %d, want 500 when persist fails: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestInitialRancherTokenPrefersFlagThenEnv(t *testing.T) {
-	t.Setenv("KUI_RANCHER_TOKEN", "env-token")
-	if got := initialRancherToken(""); got != "env-token" {
-		t.Fatalf("initialRancherToken(\"\") = %q, want env token", got)
+	t.Setenv(settings.EnvToken, "env-token")
+	if got := settings.TokenFromFlagOrEnv(""); got != "env-token" {
+		t.Fatalf("TokenFromFlagOrEnv(\"\") = %q, want env token", got)
 	}
-	if got := initialRancherToken(" flag-token "); got != "flag-token" {
-		t.Fatalf("initialRancherToken with flag = %q, want trimmed flag token", got)
+	if got := settings.TokenFromFlagOrEnv(" flag-token "); got != "flag-token" {
+		t.Fatalf("TokenFromFlagOrEnv with flag = %q, want trimmed flag token", got)
 	}
-	t.Setenv("KUI_RANCHER_TOKEN", "")
-	if got := initialRancherToken(""); got != "" {
-		t.Fatalf("initialRancherToken with neither = %q, want empty", got)
+	t.Setenv(settings.EnvToken, "")
+	if got := settings.TokenFromFlagOrEnv(""); got != "" {
+		t.Fatalf("TokenFromFlagOrEnv with neither = %q, want empty", got)
 	}
 }
 

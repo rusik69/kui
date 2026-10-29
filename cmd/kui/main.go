@@ -17,19 +17,9 @@ import (
 	webview "github.com/webview/webview_go"
 
 	"github.com/rusik69/kui/internal/k8s"
+	"github.com/rusik69/kui/internal/settings"
 	"github.com/rusik69/kui/internal/web"
 )
-
-// rancherTokenEnvVar matches the web package's setting; duplicated as a
-// literal here to keep cmd from importing internal/web helpers.
-const rancherTokenEnvVar = "KUI_RANCHER_TOKEN"
-
-func initialRancherToken(flagToken string) string {
-	if strings.TrimSpace(flagToken) != "" {
-		return strings.TrimSpace(flagToken)
-	}
-	return strings.TrimSpace(os.Getenv(rancherTokenEnvVar))
-}
 
 func main() {
 	os.Exit(run())
@@ -45,7 +35,7 @@ func run() int {
 	defaultContext := flags.String("context", "", "default kubeconfig context (defaults to current-context)")
 	defaultNamespace := flags.String("namespace", "", "default namespace (defaults to the selected context's namespace or all namespaces)")
 	accessLog := flags.Bool("access-log", false, "log HTTP requests (method, path, status, duration)")
-	rancherURL := flags.String("rancher-url", os.Getenv("KUI_RANCHER_URL"), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts")
+	rancherURL := flags.String("rancher-url", os.Getenv(settings.EnvURL), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts")
 	rancherTokenFlag := flags.String("rancher-token", "", "Rancher API bearer token (or set KUI_RANCHER_TOKEN; env var preferred to keep the token out of the process list)")
 	rancherInsecure := flags.Bool("rancher-insecure", false, "skip TLS verification for the Rancher server (self-signed certificates)")
 	if err := flags.Parse(os.Args[1:]); err != nil {
@@ -56,8 +46,9 @@ func run() int {
 	}
 
 	mgr := k8s.NewManager(*kubeconfig)
-	rancherToken := initialRancherToken(*rancherTokenFlag)
-	if strings.TrimSpace(*rancherURL) != "" {
+	rancherToken := settings.TokenFromFlagOrEnv(*rancherTokenFlag)
+	flagConfiguredRancher := strings.TrimSpace(*rancherURL) != ""
+	if flagConfiguredRancher {
 		source, err := k8s.NewRancherSource(*rancherURL, rancherToken, *rancherInsecure)
 		if err != nil {
 			log.Printf("configure Rancher: %v", err)
@@ -85,6 +76,7 @@ func run() int {
 	srv.SetDebugImage(*debugImage)
 	srv.SetDefaults(contextName, *defaultNamespace)
 	srv.SetRancherToken(rancherToken)
+	srv.InitRancher(flagConfiguredRancher)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

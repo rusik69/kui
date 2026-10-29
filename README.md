@@ -44,9 +44,15 @@ KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.exam
 - Contexts refresh from Rancher every 5 minutes; a generated kubeconfig is
   reused for 1 hour. Tokens Rancher embeds expire per the server's
   `kubeconfig-default-token-ttl-minutes` setting (default 30 days).
-- Imports are in-memory only; the kubeconfig file is never modified. The
-  token entered in the UI stays in process memory and is never returned by
-  the API — responses only say whether one is saved.
+- Connections saved in the UI persist to `settings.json` in the user config
+  directory (`~/Library/Application Support/kui`, `~/.config/kui`,
+  `%AppData%\kui`; override with `KUI_CONFIG_DIR`), written with owner-only
+  permissions, and are restored on the next start. CLI flags and environment
+  variables win over the file for the current process but are not persisted.
+  Disconnecting from the UI clears the saved entry.
+- The settings file and the kubeconfig are never modified by imports beyond
+  that; the token is never returned by the API — responses only say whether
+  one is saved.
 - If Rancher is unreachable, the last known cluster set keeps working until
   the server responds again.
 - With no kubeconfig and no Rancher configured, kui still serves the shell

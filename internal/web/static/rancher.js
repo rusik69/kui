@@ -39,6 +39,7 @@
 				const parts = [];
 				if (data.clusters) parts.push(`${data.clusters} cluster${data.clusters === 1 ? "" : "s"} imported`);
 				if (data.reachable === false) parts.push("unreachable");
+				parts.push(data.persist ? "saved to disk — restored on restart" : "from flags/env — not saved");
 				announce(parts.length ? `Connected. ${parts.join(" · ")}.` : "Connected.", data.reachable === false ? "warning" : "success");
 			} else {
 				announce("Not connected. Enter a server URL and API key to import its clusters.");
@@ -68,7 +69,7 @@
 			tokenInput.value = "";
 			tokenInput.placeholder = data.hasToken ? "••••••••••••" : "";
 			removeButton.hidden = false;
-			announce(`Connected. ${data.clusters ?? 0} cluster${data.clusters === 1 ? "" : "s"} available as rancher/<name> contexts. Reloading…`, "success");
+			announce(`Connected. ${data.clusters ?? 0} cluster${data.clusters === 1 ? "" : "s"} available as rancher/<name> contexts. Settings saved — they will be restored on restart. Reloading…`, "success");
 			setTimeout(() => window.location.reload(), 1200);
 		} catch (_) {
 			announce("Connection failed. Check the URL, API key, and network.", "failure");
@@ -88,7 +89,7 @@
 			tokenInput.value = "";
 			tokenInput.placeholder = "";
 			insecureInput.checked = false;
-			announce("Disconnected. Rancher contexts were removed. Reloading…", "success");
+			announce("Disconnected. Saved settings were removed. Reloading…", "success");
 			setTimeout(() => window.location.reload(), 1200);
 		} catch (_) {
 			announce("Disconnect failed.", "failure");

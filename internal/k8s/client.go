@@ -89,7 +89,7 @@ func (m *Manager) Clients(ctxName string) (*Clients, error) {
 // lives in the kubeconfig file or was imported from Rancher.
 func (m *Manager) restConfigFor(ctxName string) (*rest.Config, error) {
 	if m.hasRancherContext(ctxName) {
-		return m.rancher.RestConfig(context.Background(), ctxName)
+		return m.Rancher().RestConfig(context.Background(), ctxName)
 	}
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(m.loadingRules, overrides).ClientConfig()

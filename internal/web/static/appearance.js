@@ -120,11 +120,11 @@
 		const button = document.createElement("button");
 		button.type = "button";
 		button.id = "appearance-button";
-		button.className = "appearance-launcher";
-		button.textContent = "Appearance";
+		button.className = "icon-btn appearance-launcher";
 		button.setAttribute("aria-label", "Appearance settings");
 		button.dataset.tooltip = "Appearance settings";
 		button.title = "Appearance settings";
+		button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-palette"/></svg>`;
 		(document.querySelector(".sidebar-header") || document.body).append(button);
 
 		dialog = document.createElement("dialog");

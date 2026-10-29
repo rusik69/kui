@@ -23,9 +23,11 @@ type ContextInfo struct {
 
 // Manager loads kubeconfig and hands out cached per-context clients. An
 // optional Rancher source adds imported cluster contexts on top of the
-// kubeconfig file without modifying it.
+// kubeconfig file without modifying it. The source can be attached, replaced,
+// or removed at runtime (see SetRancher).
 type Manager struct {
 	loadingRules      *clientcmd.ClientConfigLoadingRules
+	sourceMu          sync.RWMutex
 	rancher           *RancherSource
 	mu                sync.RWMutex
 	clients           map[string]*Clients
@@ -46,9 +48,21 @@ func NewManager(kubeconfigPath string) *Manager {
 }
 
 // SetRancher attaches a Rancher source whose clusters appear as extra
-// contexts. Call it before the first ListContexts/Clients use.
+// contexts. Passing nil removes the current source. Safe to call while the
+// server is running; clients built for no-longer-imported clusters are
+// dropped on the next fingerprint check.
 func (m *Manager) SetRancher(source *RancherSource) {
+	m.sourceMu.Lock()
 	m.rancher = source
+	m.sourceMu.Unlock()
+	m.refreshIfKubeconfigChanged()
+}
+
+// Rancher returns the currently attached Rancher source, or nil.
+func (m *Manager) Rancher() *RancherSource {
+	m.sourceMu.RLock()
+	defer m.sourceMu.RUnlock()
+	return m.rancher
 }
 
 // refreshIfKubeconfigChanged drops clients built from stale cluster, user,
@@ -67,10 +81,10 @@ func (m *Manager) refreshIfKubeconfigChanged() {
 		}
 		_, _ = hash.Write([]byte{0})
 	}
-	if m.rancher != nil {
+	if m.Rancher() != nil {
 		_, _ = hash.Write([]byte("rancher"))
 		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(m.rancher.Fingerprint()))
+		_, _ = hash.Write([]byte(m.Rancher().Fingerprint()))
 		_, _ = hash.Write([]byte{0})
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
@@ -88,12 +102,12 @@ func (m *Manager) ListContexts() ([]ContextInfo, error) {
 	m.refreshIfKubeconfigChanged()
 	raw, err := m.loadFileConfig()
 	if err != nil {
-		if m.rancher == nil {
+		if m.Rancher() == nil {
 			return nil, err
 		}
 		// The kubeconfig file is unreadable; Rancher clusters may still be
 		// usable on their own.
-		if rancherContexts, rerr := m.rancher.Contexts(context.Background()); rerr == nil {
+		if rancherContexts, rerr := m.Rancher().Contexts(context.Background()); rerr == nil {
 			return rancherContexts, nil
 		}
 		return nil, err
@@ -107,8 +121,8 @@ func (m *Manager) ListContexts() ([]ContextInfo, error) {
 			Current:   name == raw.CurrentContext,
 		})
 	}
-	if m.rancher != nil {
-		if rancherContexts, rerr := m.rancher.Contexts(context.Background()); rerr == nil {
+	if m.Rancher() != nil {
+		if rancherContexts, rerr := m.Rancher().Contexts(context.Background()); rerr == nil {
 			out = append(out, rancherContexts...)
 		}
 	}
@@ -123,7 +137,7 @@ func (m *Manager) loadFileConfig() (*clientcmdapi.Config, error) {
 
 // hasRancherContext reports whether ctxName names a Rancher-imported context.
 func (m *Manager) hasRancherContext(ctxName string) bool {
-	return m.rancher != nil && strings.HasPrefix(ctxName, RancherContextPrefix)
+	return m.Rancher() != nil && strings.HasPrefix(ctxName, RancherContextPrefix)
 }
 
 // DefaultContext returns the kubeconfig's current-context name. When the
@@ -133,7 +147,7 @@ func (m *Manager) DefaultContext() (string, error) {
 	m.refreshIfKubeconfigChanged()
 	raw, err := m.loadFileConfig()
 	if err != nil {
-		if m.rancher == nil {
+		if m.Rancher() == nil {
 			return "", err
 		}
 		return "", nil

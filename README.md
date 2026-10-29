@@ -18,7 +18,7 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 - `--kubeconfig` path to kubeconfig (defaults to `$KUBECONFIG` / `~/.kube/config`)
 - `--addr` TCP listen address (default `127.0.0.1:0`, loopback/free port; external binds require network protections)
 - `--context` and `--namespace` override the initial kubeconfig defaults
-- `--rancher-url` import cluster kubeconfigs from a Rancher management server (or set `KUI_RANCHER_URL`)
+- `--rancher-url` import cluster kubeconfigs from a Rancher management server (or set `KUI_RANCHER_URL`; can also be configured in the UI via the top-bar gear button)
 - `--rancher-token` Rancher API bearer token (or set `KUI_RANCHER_TOKEN`; env var preferred — a token on the command line is visible in the process list)
 - `--rancher-insecure` skip TLS verification for the Rancher server (self-signed certificates)
 - `--debug-image` debug-shell container image (default `busybox:1.36`)
@@ -27,7 +27,10 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 
 ### Rancher clusters
 
-Pass `--rancher-url` (plus an API token) and kui imports one context per
+Rancher can be set up two ways — from the UI or from flags. In the UI, open
+the gear button in the top bar, enter the server URL and API key, and save;
+kui verifies the connection before switching over. On the command line, pass
+`--rancher-url` (plus an API token). Either way kui imports one context per
 Rancher cluster you can access, named `rancher/<cluster name>`. They appear in
 the top-bar context switcher and the search palette like any other context;
 picking one browses the cluster through Rancher's generated kubeconfig.
@@ -41,9 +44,13 @@ KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.exam
 - Contexts refresh from Rancher every 5 minutes; a generated kubeconfig is
   reused for 1 hour. Tokens Rancher embeds expire per the server's
   `kubeconfig-default-token-ttl-minutes` setting (default 30 days).
-- Imports are in-memory only; the kubeconfig file is never modified.
+- Imports are in-memory only; the kubeconfig file is never modified. The
+  token entered in the UI stays in process memory and is never returned by
+  the API — responses only say whether one is saved.
 - If Rancher is unreachable, the last known cluster set keeps working until
   the server responds again.
+- With no kubeconfig and no Rancher configured, kui still serves the shell
+  so the connection can be set up from the browser.
 
 ### Prebuilt release binaries
 

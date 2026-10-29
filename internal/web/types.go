@@ -30,6 +30,11 @@ type PageData struct {
 	BulkDeleteURL string
 	CSRFToken     string
 	ConnError     string // non-empty when the cluster was unreachable while building this page; shell still renders
+
+	// RancherConfigured reflects whether a Rancher server is currently set
+	// up (via flags or the settings dialog); it only changes the token
+	// placeholder shown in the settings dialog.
+	RancherConfigured bool
 }
 
 // TableData backs the "table" fragment.

@@ -69,6 +69,9 @@
       <button id="theme-toggle" type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" aria-pressed="false" onclick="kui.toggleTheme()">
         <svg class="icon" id="theme-icon"><use href="#icon-moon"/></svg>
       </button>
+      <button id="rancher-button" type="button" class="icon-btn" title="Rancher settings" aria-label="Rancher settings" aria-haspopup="dialog" onclick="kuiRancher.open()">
+        <svg class="icon"><use href="#icon-gear"/></svg>
+      </button>
     </div>
     <nav class="breadcrumb" aria-label="Current location">
       <span>{{.ContextName}}</span>
@@ -104,6 +107,35 @@
   </div>
 </div>
 <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+<dialog id="rancher-dialog" class="rancher-dialog" aria-labelledby="rancher-dialog-title">
+  <form method="dialog" class="rancher-heading">
+    <h2 id="rancher-dialog-title">Rancher connection</h2>
+    <button type="submit" aria-label="Close Rancher settings" data-tooltip="Close">×</button>
+  </form>
+  <form id="rancher-form">
+    <div class="rancher-fields">
+      <label>Server URL
+        <input name="url" type="url" placeholder="https://rancher.example.com" autocomplete="off" spellcheck="false"
+               required aria-describedby="rancher-url-help">
+        <span id="rancher-url-help">Rancher management server; its clusters appear as “rancher/&lt;name&gt;” contexts.</span>
+      </label>
+      <label>API key (bearer token)
+        <input name="token" type="password" autocomplete="off" spellcheck="false"
+               aria-describedby="rancher-token-help" placeholder="{{if .RancherConfigured}}••••••••••••{{end}}">
+        <span id="rancher-token-help">Rancher → User → API &amp; Keys. Leave blank to keep the saved key.</span>
+      </label>
+      <label class="rancher-check">
+        <input name="insecureSkipTLSVerify" type="checkbox">
+        Skip TLS verification (self-signed certificates)
+      </label>
+    </div>
+    <p class="rancher-status" id="rancher-status" role="status" aria-live="polite"></p>
+    <div class="rancher-actions">
+      <button type="button" data-action="remove" class="rancher-remove">Disconnect</button>
+      <button type="submit" data-action="save">Save &amp; connect</button>
+    </div>
+  </form>
+</dialog>
 <div class="statusbar" id="statusbar" data-watch-state="connecting">
   <span id="cluster-status" hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML" data-cluster-state="loading">
     Loading cluster status…
@@ -118,6 +150,7 @@
 <script src="/static/notifications.js"></script>
 <script src="/static/workspaces.js"></script>
 <script src="/static/appearance.js"></script>
+<script src="/static/rancher.js"></script>
 <script src="/static/accessibility.js"></script>
 </body>
 </html>

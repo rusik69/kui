@@ -162,6 +162,33 @@ func (s *RancherSource) Fingerprint() string {
 	return s.fingerprint
 }
 
+// Status reports the source's endpoint and last refresh result for the UI.
+// It performs a lightweight cluster-list request; the token is never
+// included in the response.
+func (s *RancherSource) Status(ctx context.Context) (map[string]any, error) {
+	s.mu.Lock()
+	clusters, err := s.listClustersLocked(ctx)
+	builtAt := s.builtAt
+	clusterCount := 0
+	if s.built != nil {
+		clusterCount = len(s.built.Contexts)
+	}
+	s.mu.Unlock()
+	out := map[string]any{
+		"url":      s.base,
+		"clusters": clusterCount,
+	}
+	if builtAt != (time.Time{}) {
+		out["lastRefresh"] = builtAt.UTC().Format(time.RFC3339)
+	}
+	if err != nil {
+		return out, err
+	}
+	out["reachable"] = true
+	out["available"] = len(clusters)
+	return out, nil
+}
+
 // mergedConfig returns the kubeconfig view containing one context per
 // accessible Rancher cluster, rebuilding it when the cached copy is older
 // than rebuildTTL. Rebuilds serialize behind the source mutex; the steady

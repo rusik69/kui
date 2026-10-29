@@ -16,7 +16,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		var err error
 		ctxName, err = s.mgr.DefaultContext()
 		if err != nil {
-			http.Error(w, "unable to load kubeconfig context", http.StatusServiceUnavailable)
+			// Unreadable kubeconfig; the shell still renders so Rancher can
+			// be set up from the browser.
+			s.renderNoContextPage(w, "unable to load kubeconfig context")
 			return
 		}
 	}
@@ -24,11 +26,25 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		var err error
 		ctxName, err = s.fallbackContext()
 		if err != nil {
-			http.Error(w, "no usable kubeconfig context is configured", http.StatusServiceUnavailable)
+			s.renderNoContextPage(w, err.Error())
 			return
 		}
 	}
 	http.Redirect(w, r, "/c/"+encodeCtx(ctxName), http.StatusFound)
+}
+
+// renderNoContextPage serves the full shell with a friendly banner instead
+// of an error page: without any context the Rancher settings dialog and the
+// theme controls are still the user's way forward.
+func (s *Server) renderNoContextPage(w http.ResponseWriter, reason string) {
+	data := PageData{
+		Context:     "",
+		ContextName: "",
+		Resource:    "overview",
+		CSRFToken:   s.csrfToken,
+		ConnError:   reason,
+	}
+	s.render(w, "page", data)
 }
 
 func (s *Server) handleContextPage(w http.ResponseWriter, r *http.Request) {
@@ -138,19 +154,20 @@ func (s *Server) buildPageData(ctx context.Context, ctxID, ns, resource string) 
 	}
 
 	return PageData{
-		Context:       ctxID,
-		ContextName:   ctxName,
-		Contexts:      contexts,
-		Namespace:     ns,
-		Namespaces:    namespaces,
-		Resource:      resource,
-		Groups:        k8s.Groups(),
-		GroupKinds:    groupKinds,
-		ListURL:       "/c/" + ctxID + "/" + ns + "/" + resource + "?frame=table",
-		WatchURL:      "/c/" + ctxID + "/" + ns + "/" + resource + "/watch",
-		BulkDeleteURL: "/c/" + ctxID + "/bulk-delete",
-		CSRFToken:     s.csrfToken,
-		ConnError:     connErr,
+		Context:           ctxID,
+		ContextName:       ctxName,
+		Contexts:          contexts,
+		Namespace:         ns,
+		Namespaces:        namespaces,
+		Resource:          resource,
+		Groups:            k8s.Groups(),
+		GroupKinds:        groupKinds,
+		ListURL:           "/c/" + ctxID + "/" + ns + "/" + resource + "?frame=table",
+		WatchURL:          "/c/" + ctxID + "/" + ns + "/" + resource + "/watch",
+		BulkDeleteURL:     "/c/" + ctxID + "/bulk-delete",
+		CSRFToken:         s.csrfToken,
+		ConnError:         connErr,
+		RancherConfigured: s.mgr.Rancher() != nil,
 	}, nil
 }
 

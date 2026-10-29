@@ -42,6 +42,8 @@ type Server struct {
 	debugImage       string
 	defaultContext   string
 	defaultNamespace string
+	rancherMu        sync.Mutex
+	rancherToken     string // in-memory only; write-only from the UI's perspective
 }
 
 // New builds a Server with routes registered and templates parsed.
@@ -146,6 +148,15 @@ func (s *Server) SetDebugImage(image string) {
 func (s *Server) SetDefaults(contextName, namespace string) {
 	s.defaultContext = contextName
 	s.defaultNamespace = namespace
+}
+
+// SetRancherToken records the Rancher API token supplied at startup so the
+// settings dialog can keep it when saving a new URL without retyping it.
+// The token stays in process memory only.
+func (s *Server) SetRancherToken(token string) {
+	s.rancherMu.Lock()
+	s.rancherToken = token
+	s.rancherMu.Unlock()
 }
 
 func (s *Server) Close() {
@@ -305,6 +316,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/deployments/{name}/action", s.protectMutation(s.handleDeploymentAction))
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/deployments/{name}/status", s.handleDeploymentStatus)
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/deployments/{name}/history", s.handleDeploymentHistory)
+
+	// Rancher setup is global (not per-context): the imported clusters appear
+	// in every context's switcher. Mutations carry the CSRF token.
+	s.mux.HandleFunc("GET /rancher", s.handleRancherStatus)
+	s.mux.HandleFunc("PUT /rancher", s.protectMutation(s.handleRancherSave))
+	s.mux.HandleFunc("DELETE /rancher", s.protectMutation(s.handleRancherRemove))
 }
 
 func (s *Server) render(w http.ResponseWriter, name string, data any) {

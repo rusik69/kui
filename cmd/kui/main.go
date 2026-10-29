@@ -20,6 +20,17 @@ import (
 	"github.com/rusik69/kui/internal/web"
 )
 
+// rancherTokenEnvVar matches the web package's setting; duplicated as a
+// literal here to keep cmd from importing internal/web helpers.
+const rancherTokenEnvVar = "KUI_RANCHER_TOKEN"
+
+func initialRancherToken(flagToken string) string {
+	if strings.TrimSpace(flagToken) != "" {
+		return strings.TrimSpace(flagToken)
+	}
+	return strings.TrimSpace(os.Getenv(rancherTokenEnvVar))
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -35,7 +46,7 @@ func run() int {
 	defaultNamespace := flags.String("namespace", "", "default namespace (defaults to the selected context's namespace or all namespaces)")
 	accessLog := flags.Bool("access-log", false, "log HTTP requests (method, path, status, duration)")
 	rancherURL := flags.String("rancher-url", os.Getenv("KUI_RANCHER_URL"), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts")
-	rancherToken := flags.String("rancher-token", os.Getenv("KUI_RANCHER_TOKEN"), "Rancher API bearer token; prefer the KUI_RANCHER_TOKEN environment variable to keep the token out of the process list")
+	rancherTokenFlag := flags.String("rancher-token", "", "Rancher API bearer token (or set KUI_RANCHER_TOKEN; env var preferred to keep the token out of the process list)")
 	rancherInsecure := flags.Bool("rancher-insecure", false, "skip TLS verification for the Rancher server (self-signed certificates)")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -45,21 +56,24 @@ func run() int {
 	}
 
 	mgr := k8s.NewManager(*kubeconfig)
+	rancherToken := initialRancherToken(*rancherTokenFlag)
 	if strings.TrimSpace(*rancherURL) != "" {
-		source, err := k8s.NewRancherSource(*rancherURL, *rancherToken, *rancherInsecure)
+		source, err := k8s.NewRancherSource(*rancherURL, rancherToken, *rancherInsecure)
 		if err != nil {
 			log.Printf("configure Rancher: %v", err)
 			return 1
 		}
-		if strings.TrimSpace(*rancherToken) == "" {
-			log.Printf("rancher-url set without a token; set --rancher-token or KUI_RANCHER_TOKEN to import clusters")
+		if strings.TrimSpace(rancherToken) == "" {
+			log.Printf("rancher-url set without a token; set --rancher-token or KUI_RANCHER_TOKEN, or configure it in the UI")
 		}
 		mgr.SetRancher(source)
 	}
 	contextName, err := selectContext(mgr, *defaultContext)
 	if err != nil {
-		log.Printf("load kubeconfig: %v", err)
-		return 1
+		// No usable context yet (empty or unreadable kubeconfig, Rancher not
+		// set up): still serve the UI shell so the Rancher settings dialog
+		// and context switcher can bootstrap a setup from the browser.
+		log.Printf("no usable context yet: %v — serving the shell anyway; configure a context or connect Rancher in the UI", err)
 	}
 
 	srv, err := web.New(mgr)
@@ -70,6 +84,7 @@ func run() int {
 	defer srv.Close()
 	srv.SetDebugImage(*debugImage)
 	srv.SetDefaults(contextName, *defaultNamespace)
+	srv.SetRancherToken(rancherToken)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -177,7 +192,7 @@ func selectContext(mgr *k8s.Manager, override string) (string, error) {
 		if len(contexts) > 0 {
 			return contexts[0].Name, nil
 		}
-		return "", errors.New("kubeconfig has no current-context; specify --context")
+		return "", errors.New("no contexts available; connect Rancher in the UI or fix the kubeconfig")
 	}
 	for _, ctx := range contexts {
 		if ctx.Name == selected {

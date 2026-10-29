@@ -109,14 +109,64 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 	--text-code: #4a3430;
 }
 .appearance-launcher {
-	margin: 8px 12px;
-	padding: 7px 10px;
+	margin: 0;
+	padding: 5px;
+	border: 1px solid transparent;
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--text-dim);
+	cursor: pointer;
+}
+.appearance-launcher:hover { color: var(--accent); border-color: var(--border); background: var(--bg-hover); }
+.appearance-launcher .icon { width: 16px; height: 16px; }
+/* Collapsed sidebar: keep the launcher visible and centered. */
+.sidebar.collapsed .appearance-launcher { margin: 0 auto 8px; }
+.rancher-dialog {
+	width: min(460px, calc(100vw - 24px));
+	max-height: min(90vh, 720px);
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: calc(var(--radius) + 5px);
+	background: var(--bg-raised);
+	color: var(--text);
+	box-shadow: 0 20px 60px rgb(0 0 0 / 40%);
+}
+.rancher-dialog::backdrop { background: rgb(0 0 0 / 58%); }
+.rancher-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.rancher-heading h2 { margin: 0; font-size: 1.25em; }
+.rancher-dialog button {
+	min-height: 36px;
+	padding: 6px 9px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
 	background: var(--bg-hover);
 	color: var(--text);
 	font: inherit;
 	cursor: pointer;
+}
+.rancher-fields { display: grid; gap: 14px; }
+.rancher-fields label { display: grid; gap: 6px; font-weight: 600; }
+.rancher-fields input:not([type="checkbox"]) { width: 100%; min-height: 36px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
+.rancher-fields span { color: var(--text-dim); font-size: .9em; font-weight: 400; }
+.rancher-check { display: flex !important; align-items: center; gap: 8px; font-weight: 400 !important; }
+.rancher-check input { accent-color: var(--accent); }
+.rancher-status { min-height: 1.5em; margin: 14px 0 0; color: var(--text-dim); }
+.rancher-status[data-state="success"] { color: var(--success); }
+.rancher-status[data-state="warning"] { color: var(--warning); }
+.rancher-status[data-state="failure"] { color: var(--error); }
+.rancher-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.rancher-actions .rancher-remove { margin-right: auto; color: var(--error); }
+@media (forced-colors: active) {
+	.rancher-dialog, .rancher-dialog button, .rancher-dialog input { border: 1px solid ButtonText; }
+	.rancher-dialog { color: CanvasText; background: Canvas; }
+	.rancher-dialog::backdrop { background: Canvas; opacity: .85; }
+	.rancher-dialog button, .rancher-dialog input { color: ButtonText; background: ButtonFace; }
+	.rancher-dialog *:focus-visible { outline: 2px solid Highlight !important; }
+}
+@media (max-width: 420px) {
+	.rancher-dialog { padding: 14px; }
+	.rancher-actions { display: grid; grid-template-columns: 1fr 1fr; }
+	.rancher-actions .rancher-remove { margin-right: 0; }
 }
 .appearance-dialog {
 	width: min(460px, calc(100vw - 24px));
@@ -186,7 +236,8 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 	*, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 @media (forced-colors: active) {
-	.appearance-dialog, .appearance-launcher, .appearance-dialog button, .appearance-dialog select { border: 1px solid ButtonText; }
+	.appearance-dialog, .appearance-dialog button, .appearance-dialog select { border: 1px solid ButtonText; }
+	.appearance-launcher { border: 1px solid ButtonText; }
 	.appearance-dialog { color: CanvasText; background: Canvas; }
 	.appearance-dialog::backdrop { background: Canvas; opacity: .85; }
 	.appearance-dialog button, .appearance-dialog select { color: ButtonText; background: ButtonFace; }

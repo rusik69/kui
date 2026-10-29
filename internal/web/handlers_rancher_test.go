@@ -228,6 +228,7 @@ func TestRancherSaveValidation(t *testing.T) {
 		body   rancherSettingsRequest
 		status int
 	}{
+		// No kubeconfigDir pointer (older client) and no URL: still an error.
 		{name: "missing url", body: rancherSettingsRequest{Token: "t"}, status: http.StatusBadRequest},
 		{name: "multiline token", body: rancherSettingsRequest{URL: "https://rancher.example.com", Token: "a\nb"}, status: http.StatusBadRequest},
 		{name: "bad url", body: rancherSettingsRequest{URL: "https://", Token: "t"}, status: http.StatusBadRequest},
@@ -239,6 +240,22 @@ func TestRancherSaveValidation(t *testing.T) {
 			}
 		})
 	}
+	t.Run("missing url with kubeconfigDir applies the dir", func(t *testing.T) {
+		dir := t.TempDir()
+		rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+			KubeconfigDir: &dir,
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		if server.mgr.KubeconfigDir() != dir {
+			t.Fatalf("kubeconfig dir = %q, want %q", server.mgr.KubeconfigDir(), dir)
+		}
+		persisted := server.settingsStore.Kubeconfig()
+		if persisted == nil || persisted.Dir != dir {
+			t.Fatalf("persisted kubeconfig = %+v, want dir %q", persisted, dir)
+		}
+	})
 }
 
 func TestRancherRemoveDetachesSource(t *testing.T) {
@@ -398,6 +415,144 @@ func TestRancherRemoveClearsPersistedFile(t *testing.T) {
 	restored.initRancher(false)
 	if restored.mgr.Rancher() != nil {
 		t.Fatal("removed connection reconnected on restart")
+	}
+}
+
+// TestKubeconfigDirPersistsAcrossRestart saves a kubeconfig directory through
+// the API, then builds a fresh Server over the same config dir and verifies
+// the directory was restored and actually serves its contexts.
+func TestKubeconfigDirPersistsAcrossRestart(t *testing.T) {
+	server, _ := rancherTestServer(t)
+	dir := t.TempDir()
+	writeDirKubeconfig(t, dir, "dirtest.yaml", "dirtest", "https://127.0.0.1:1")
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		KubeconfigDir: &dir,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// "Restart": a new Server over a fresh manager and the same settings dir.
+	restored, err := New(freshManager(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.initRancher(false)
+	if got := restored.mgr.KubeconfigDir(); got != dir {
+		t.Fatalf("kubeconfig dir after restart = %q, want %q", got, dir)
+	}
+	contexts, err := restored.mgr.ListContexts()
+	if err != nil {
+		t.Fatalf("ListContexts after restart: %v", err)
+	}
+	found := false
+	for _, c := range contexts {
+		if c.Name == "dirtest" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dirtest context missing after restart: %+v", contexts)
+	}
+}
+
+// TestKubeconfigDirFlagPreventsRestore verifies a --kubeconfig flag at startup
+// overrides the persisted directory.
+func TestKubeconfigDirFlagPreventsRestore(t *testing.T) {
+	server, _ := rancherTestServer(t)
+	persistedDir := t.TempDir()
+	writeDirKubeconfig(t, persistedDir, "p.yaml", "pctx", "https://127.0.0.1:1")
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{
+		KubeconfigDir: &persistedDir,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Restart with a --kubeconfig flag: the persisted dir must not override it.
+	restored, err := New(freshManager(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.SetFlagKubeconfig()
+	restored.initRancher(false)
+	// The flag's file path stays active (fresh manager's plain file path);
+	// the persisted dir must not override it.
+	if got := restored.mgr.KubeconfigDir(); got == persistedDir {
+		t.Fatalf("persisted dir %q overrode the startup flag", persistedDir)
+	}
+	if got := restored.mgr.KubeconfigDir(); got == "" {
+		t.Fatal("flag kubeconfig path lost")
+	}
+	// The persisted entry survives on disk for later runs.
+	if kc := server.settingsStore.Kubeconfig(); kc == nil || kc.Dir != persistedDir {
+		t.Fatalf("persisted kubeconfig disturbed: %+v", kc)
+	}
+}
+
+// TestKubeconfigDirValidation verifies error paths for the dir setting.
+func TestKubeconfigDirValidation(t *testing.T) {
+	server, _ := rancherTestServer(t)
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{KubeconfigDir: &missing})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing dir status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	// A file, not a directory.
+	file := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(file, []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec = rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{KubeconfigDir: &file})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("file-instead-of-dir status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if server.mgr.KubeconfigDir() == file {
+		t.Fatal("a file path replaced the kubeconfig source")
+	}
+	// Clearing the dir (empty string) reverts to defaults.
+	empty := ""
+	if rec := rancherRequest(t, server, http.MethodPut, "/rancher", rancherSettingsRequest{KubeconfigDir: &empty}); rec.Code != http.StatusOK {
+		t.Fatalf("clear dir status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := server.mgr.KubeconfigDir(); got != "" {
+		t.Fatalf("kubeconfig dir after clear = %q, want empty", got)
+	}
+	if kc := server.settingsStore.Kubeconfig(); kc == nil || kc.Dir != "" {
+		t.Fatalf("cleared kubeconfig persisted as %+v", kc)
+	}
+}
+
+// freshManager builds a Manager with a plain readable kubeconfig (no dir,
+// no Rancher) — the state of a fresh process start.
+func freshManager(t *testing.T) *k8s.Manager {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte("apiVersion: v1\nkind: Config\ncurrent-context: fresh\nclusters:\n- name: c\n  cluster:\n    server: https://127.0.0.1:1\ncontexts:\n- name: fresh\n  context:\n    cluster: c\n    user: u\nusers:\n- name: u\n  user: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return k8s.NewManager(path)
+}
+
+// writeDirKubeconfig writes one kubeconfig file into dir.
+func writeDirKubeconfig(t *testing.T, dir, name, contextName, server string) {
+	t.Helper()
+	config := fmt.Sprintf(`apiVersion: v1
+kind: Config
+current-context: %s
+clusters:
+- name: %s-cluster
+  cluster:
+    server: %s
+contexts:
+- name: %s
+  context:
+    cluster: %s-cluster
+    user: %s-user
+users:
+- name: %s-user
+  user: {}
+`, contextName, contextName, server, contextName, contextName, contextName, contextName)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

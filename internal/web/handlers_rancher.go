@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -11,11 +12,13 @@ import (
 )
 
 // Rancher settings payloads. The API token is write-only: responses report
-// whether a token is set, never the token itself.
+// whether a token is set, never the token itself. The same endpoints carry
+// the kubeconfig directory setting.
 type rancherSettingsRequest struct {
-	URL                   string `json:"url"`
-	Token                 string `json:"token"`
-	InsecureSkipTLSVerify bool   `json:"insecureSkipTLSVerify"`
+	URL                   string  `json:"url"`
+	Token                 string  `json:"token"`
+	InsecureSkipTLSVerify bool    `json:"insecureSkipTLSVerify"`
+	KubeconfigDir         *string `json:"kubeconfigDir,omitempty"`
 }
 
 type rancherSettingsResponse struct {
@@ -30,35 +33,40 @@ type rancherSettingsResponse struct {
 	// persisted), or empty when not configured.
 	Source  string `json:"source,omitempty"`
 	Persist bool   `json:"persist"`
+
+	// KubeconfigDir is the active kubeconfig directory ("" when kui uses
+	// the default kubeconfig file / $KUBECONFIG).
+	KubeconfigDir string `json:"kubeconfigDir,omitempty"`
 }
 
 const rancherTokenEnvVar = "KUI_RANCHER_TOKEN"
 const rancherURLBodyLimit = 1 << 10
 const rancherTokenBodyLimit = 4 << 10
 
-// initRancher restores a Rancher connection persisted in the settings store.
-// CLI flags take precedence: when flags configured a source, the persisted
-// entry is left untouched on disk but not activated.
-// initRancher restores a Rancher connection persisted in the settings store.
-// CLI flags take precedence: when flags configured a source, the persisted
-// entry is left untouched on disk but not activated.
+// initRancher restores Rancher and kubeconfig-directory settings persisted in
+// the settings store. CLI flags take precedence: when flags configured a
+// Rancher source, the persisted Rancher entry is left untouched on disk but
+// not activated. The persisted kubeconfig directory applies unless a
+// --kubeconfig flag was given.
 func (s *Server) initRancher(flagConfigured bool) {
 	if s.settingsStore == nil {
 		s.settingsStore = settings.DefaultStoreOrNoop()
 	}
 	persisted := s.settingsStore.Rancher()
-	if persisted == nil || flagConfigured {
-		return
+	if persisted != nil && !flagConfigured {
+		if source, err := k8s.NewRancherSource(persisted.URL, persisted.Token, persisted.InsecureSkipTLSVerify); err == nil {
+			s.mgr.SetRancher(source)
+			s.rancherMu.Lock()
+			s.rancherToken = persisted.Token
+			s.rancherSourceKind = "file"
+			s.rancherMu.Unlock()
+		}
 	}
-	source, err := k8s.NewRancherSource(persisted.URL, persisted.Token, persisted.InsecureSkipTLSVerify)
-	if err != nil {
-		return
+	if kc := s.settingsStore.Kubeconfig(); kc != nil && strings.TrimSpace(kc.Dir) != "" && !s.flagKubeconfig {
+		if err := s.mgr.SetKubeconfigDir(kc.Dir); err != nil {
+			log.Printf("restore kubeconfig directory %q from settings: %v", kc.Dir, err)
+		}
 	}
-	s.mgr.SetRancher(source)
-	s.rancherMu.Lock()
-	s.rancherToken = persisted.Token
-	s.rancherSourceKind = "file"
-	s.rancherMu.Unlock()
 }
 
 func (s *Server) handleRancherStatus(w http.ResponseWriter, _ *http.Request) {
@@ -89,6 +97,7 @@ func (s *Server) handleRancherStatus(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		resp.Error = err.Error()
 	}
+	resp.KubeconfigDir = s.mgr.KubeconfigDir()
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -98,9 +107,46 @@ func (s *Server) handleRancherSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid Rancher settings payload", http.StatusBadRequest)
 		return
 	}
+	// Kubeconfig directory: only changed when the field was sent (nil means
+	// the dialog did not touch it — e.g. an older client). Applied before the
+	// Rancher work so a bad dir fails fast without touching Rancher state.
+	if req.KubeconfigDir != nil {
+		dir := strings.TrimSpace(*req.KubeconfigDir)
+		if dir != "" {
+			if err := s.mgr.SetKubeconfigDir(dir); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			if err := s.mgr.SetKubeconfigDir(""); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := s.settingsStore.SaveKubeconfig(&settings.Kubeconfig{Dir: dir}); err != nil {
+			http.Error(w, "kubeconfig directory applied, but saving the settings file failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	url := strings.TrimSpace(req.URL)
 	if url == "" {
-		http.Error(w, "Rancher server URL is required", http.StatusBadRequest)
+		// Rancher section untouched. Valid only when the payload carried a
+		// kubeconfigDir field (the dialog always sends it); an older client
+		// sending neither URL nor dir is still an error.
+		if req.KubeconfigDir == nil {
+			http.Error(w, "Rancher server URL is required", http.StatusBadRequest)
+			return
+		}
+		// Rancher section untouched: keep the current Rancher state; the
+		// kubeconfig directory (applied above) is already persisted.
+		resp := rancherSettingsResponse{
+			Configured:    s.mgr.Rancher() != nil,
+			HasToken:      s.hasToken(),
+			Source:        s.activeSourceKind(),
+			Persist:       s.activeSourceKind() == "file",
+			KubeconfigDir: s.mgr.KubeconfigDir(),
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	token := strings.TrimSpace(req.Token)
@@ -168,6 +214,27 @@ func (s *Server) handleRancherRemove(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.setRancherSource(nil, "", "")
 	writeJSON(w, http.StatusOK, rancherSettingsResponse{})
+}
+
+// activeToken returns the in-memory token for the active source.
+func (s *Server) activeToken() string {
+	s.rancherMu.RLock()
+	defer s.rancherMu.RUnlock()
+	return s.rancherToken
+}
+
+// activeSourceKind returns where the active Rancher settings came from.
+func (s *Server) activeSourceKind() string {
+	s.rancherMu.RLock()
+	defer s.rancherMu.RUnlock()
+	return s.rancherSourceKind
+}
+
+// hasToken reports whether a token is set for the active source.
+func (s *Server) hasToken() bool {
+	s.rancherMu.RLock()
+	defer s.rancherMu.RUnlock()
+	return s.rancherToken != ""
 }
 
 // setRancherSource swaps the active Rancher source, in-memory token, and

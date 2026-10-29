@@ -32,10 +32,18 @@ type Rancher struct {
 	InsecureSkipTLSVerify bool   `json:"insecureSkipTLSVerify,omitempty"`
 }
 
+// Kubeconfig is a persisted kubeconfig source. Dir holds a directory of
+// kubeconfig files ("" when unset); a single explicit file is configured via
+// the --kubeconfig flag and is never stored here.
+type Kubeconfig struct {
+	Dir string `json:"dir,omitempty"`
+}
+
 // Settings is the whole settings file.
 type Settings struct {
-	Version int      `json:"version"`
-	Rancher *Rancher `json:"rancher,omitempty"`
+	Version    int         `json:"version"`
+	Rancher    *Rancher    `json:"rancher,omitempty"`
+	Kubeconfig *Kubeconfig `json:"kubeconfig,omitempty"`
 }
 
 // Store reads and writes settings.json inside one directory. An empty dir
@@ -160,5 +168,24 @@ func (s *Store) ClearRancher() error {
 		return nil
 	}
 	set.Rancher = nil
+	return s.Save(set)
+}
+
+// Kubeconfig returns the persisted kubeconfig settings, or nil.
+func (s *Store) Kubeconfig() *Kubeconfig {
+	set, err := s.Load()
+	if err != nil {
+		return nil
+	}
+	return set.Kubeconfig
+}
+
+// SaveKubeconfig persists the kubeconfig settings, replacing any previous one.
+func (s *Store) SaveKubeconfig(k *Kubeconfig) error {
+	set, err := s.Load()
+	if err != nil {
+		set = Settings{}
+	}
+	set.Kubeconfig = k
 	return s.Save(set)
 }

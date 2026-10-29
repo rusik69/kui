@@ -109,14 +109,20 @@
 <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
 <dialog id="rancher-dialog" class="rancher-dialog" aria-labelledby="rancher-dialog-title">
   <form method="dialog" class="rancher-heading">
-    <h2 id="rancher-dialog-title">Rancher connection</h2>
-    <button type="submit" aria-label="Close Rancher settings" data-tooltip="Close">×</button>
+    <h2 id="rancher-dialog-title">Settings</h2>
+    <button type="submit" aria-label="Close settings" data-tooltip="Close">×</button>
   </form>
   <form id="rancher-form">
     <div class="rancher-fields">
+      <label>Kubeconfig directory
+        <input name="kubeconfigDir" type="text" placeholder="e.g. ~/kubeconfigs" autocomplete="off" spellcheck="false"
+               aria-describedby="rancher-kcdir-help">
+        <span id="rancher-kcdir-help">Directory of kubeconfig files (*.yaml, *.yml, *.json) merged into the context switcher; live-reloads on change. Leave blank to use the default kubeconfig.</span>
+      </label>
+      <h3 class="rancher-section">Rancher</h3>
       <label>Server URL
         <input name="url" type="url" placeholder="https://rancher.example.com" autocomplete="off" spellcheck="false"
-               required aria-describedby="rancher-url-help">
+               aria-describedby="rancher-url-help">
         <span id="rancher-url-help">Rancher management server; its clusters appear as “rancher/&lt;name&gt;” contexts.</span>
       </label>
       <label>API key (bearer token)
@@ -131,8 +137,8 @@
     </div>
     <p class="rancher-status" id="rancher-status" role="status" aria-live="polite"></p>
     <div class="rancher-actions">
-      <button type="button" data-action="remove" class="rancher-remove">Disconnect</button>
-      <button type="submit" data-action="save">Save &amp; connect</button>
+      <button type="button" data-action="remove" class="rancher-remove">Disconnect Rancher</button>
+      <button type="submit" data-action="save">Save settings</button>
     </div>
   </form>
 </dialog>

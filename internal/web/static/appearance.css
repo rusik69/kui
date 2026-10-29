@@ -148,6 +148,7 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 .rancher-fields label { display: grid; gap: 6px; font-weight: 600; }
 .rancher-fields input:not([type="checkbox"]) { width: 100%; min-height: 36px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
 .rancher-fields span { color: var(--text-dim); font-size: .9em; font-weight: 400; }
+.rancher-section { margin: 6px 0 0; font-size: .95em; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
 .rancher-check { display: flex !important; align-items: center; gap: 8px; font-weight: 400 !important; }
 .rancher-check input { accent-color: var(--accent); }
 .rancher-status { min-height: 1.5em; margin: 14px 0 0; color: var(--text-dim); }

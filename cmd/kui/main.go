@@ -77,6 +77,9 @@ func run() int {
 	srv.SetDebugImage(*debugImage)
 	srv.SetDefaults(contextName, *defaultNamespace)
 	srv.SetRancherToken(rancherToken)
+	if strings.TrimSpace(*kubeconfig) != "" {
+		srv.SetFlagKubeconfig()
+	}
 	srv.InitRancher(flagConfiguredRancher)
 
 	ln, err := net.Listen("tcp", *addr)

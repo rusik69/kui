@@ -47,6 +47,7 @@ type Server struct {
 	rancherToken      string // in-memory only token for the active source
 	rancherSourceKind string // "flags", "file", or "" — where the active settings came from
 	settingsStore     *settings.Store
+	flagKubeconfig    bool // --kubeconfig was given at startup; overrides the persisted dir
 }
 
 // New builds a Server with routes registered and templates parsed.
@@ -161,6 +162,12 @@ func (s *Server) SetRancherToken(token string) {
 	s.rancherMu.Lock()
 	s.rancherToken = token
 	s.rancherMu.Unlock()
+}
+
+// SetFlagKubeconfig marks that --kubeconfig was given at startup, so a
+// persisted kubeconfig directory must not override it.
+func (s *Server) SetFlagKubeconfig() {
+	s.flagKubeconfig = true
 }
 
 // InitRancher restores a Rancher connection persisted in the settings file

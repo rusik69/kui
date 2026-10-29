@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,17 +45,54 @@ type Manager struct {
 func NewManager(kubeconfigPath string) *Manager {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfigPath != "" {
-		if fi, err := os.Stat(kubeconfigPath); err == nil && fi.IsDir() {
-			rules.Precedence = kubeconfigPaths(kubeconfigPath)
-		} else {
-			rules.ExplicitPath = kubeconfigPath
-		}
+		applyKubeconfigPath(rules, kubeconfigPath)
 	}
 	return &Manager{
 		loadingRules:   rules,
 		kubeconfigPath: kubeconfigPath,
 		clients:        make(map[string]*Clients),
 	}
+}
+
+// applyKubeconfigPath configures rules for a file or directory path.
+func applyKubeconfigPath(rules *clientcmd.ClientConfigLoadingRules, path string) {
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		rules.Precedence = kubeconfigPaths(path)
+		rules.ExplicitPath = ""
+	} else {
+		rules.ExplicitPath = path
+	}
+}
+
+// SetKubeconfigDir switches the kubeconfig source to a directory at runtime
+// ("" reverts to the default loading rules / KUBECONFIG env var). Clients
+// built against the previous source are dropped on the next fingerprint
+// check. Returns an error when dir exists but is not a directory.
+func (m *Manager) SetKubeconfigDir(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir != "" {
+		if fi, err := os.Stat(dir); err != nil {
+			return fmt.Errorf("kubeconfig directory %q: %w", dir, err)
+		} else if !fi.IsDir() {
+			return fmt.Errorf("kubeconfig path %q is not a directory", dir)
+		}
+	}
+	m.mu.Lock()
+	m.loadingRules = clientcmd.NewDefaultClientConfigLoadingRules()
+	if dir != "" {
+		applyKubeconfigPath(m.loadingRules, dir)
+	}
+	m.kubeconfigPath = dir
+	m.clients = make(map[string]*Clients)
+	m.configFingerprint = ""
+	m.mu.Unlock()
+	return nil
+}
+
+// KubeconfigDir returns the active kubeconfig source: a directory path, a
+// file path, or "" for the default loading rules.
+func (m *Manager) KubeconfigDir() string {
+	return m.kubeconfigPath
 }
 
 // kubeconfigPaths returns the sorted list of kubeconfig files inside dir

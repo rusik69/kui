@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	webview "github.com/webview/webview_go"
 
@@ -51,6 +53,14 @@ func TestSelectContext(t *testing.T) {
 
 type recordingDesktopWindow struct {
 	calls []string
+
+	terminatedOnce sync.Once
+	terminated     chan struct{}
+	running        chan struct{}
+}
+
+func newRecordingDesktopWindow() *recordingDesktopWindow {
+	return &recordingDesktopWindow{terminated: make(chan struct{}), running: make(chan struct{})}
 }
 
 func (w *recordingDesktopWindow) SetTitle(title string) {
@@ -69,12 +79,16 @@ func (w *recordingDesktopWindow) Run() {
 	w.calls = append(w.calls, "run")
 }
 
+func (w *recordingDesktopWindow) Terminate() {
+	w.calls = append(w.calls, "terminate")
+}
+
 func (w *recordingDesktopWindow) Destroy() {
 	w.calls = append(w.calls, "destroy")
 }
 
 func TestOpenDesktopWindowRunsAndDestroysNativeWindow(t *testing.T) {
-	window := &recordingDesktopWindow{}
+	window := newRecordingDesktopWindow()
 	openDesktopWindow(window, "http://127.0.0.1:4321")
 	want := []string{
 		"title:kui",
@@ -86,6 +100,52 @@ func TestOpenDesktopWindowRunsAndDestroysNativeWindow(t *testing.T) {
 	if got := fmt.Sprint(window.calls); got != fmt.Sprint(want) {
 		t.Fatalf("desktop window lifecycle = %s, want %s", got, want)
 	}
+}
+
+// TestDesktopWindowTerminateUnblocksRun verifies the shutdown contract the
+// signal handler relies on: Terminate must unblock a Run that is blocking on
+// the platform event loop, so a signal (or a window that never opened) cannot
+// leave the app running with no way to close it.
+func TestDesktopWindowTerminateUnblocksRun(t *testing.T) {
+	window := &blockingDesktopWindow{recordingDesktopWindow: *newRecordingDesktopWindow()}
+	done := make(chan struct{})
+	go func() {
+		openDesktopWindow(window, "http://127.0.0.1:4321")
+		close(done)
+	}()
+	// Wait until Run() is blocked on the event loop, then terminate it the
+	// way the signal goroutine does.
+	select {
+	case <-window.running:
+	case <-time.After(2 * time.Second):
+		t.Fatal("openDesktopWindow never reached Run")
+	}
+	window.Terminate()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("openDesktopWindow did not return after Terminate")
+	}
+	want := []string{"title:kui", "size:1280x800", "navigate:http://127.0.0.1:4321", "run", "terminate", "destroy"}
+	if got := fmt.Sprint(window.calls); got != fmt.Sprint(want) {
+		t.Fatalf("terminated window lifecycle = %s, want %s", got, want)
+	}
+}
+
+type blockingDesktopWindow struct {
+	recordingDesktopWindow
+}
+
+func (w *blockingDesktopWindow) Run() {
+	w.calls = append(w.calls, "run")
+	close(w.running)
+	// Simulate the platform event loop: blocks until Terminate is called.
+	<-w.terminated
+}
+
+func (w *blockingDesktopWindow) Terminate() {
+	w.recordingDesktopWindow.Terminate()
+	w.terminatedOnce.Do(func() { close(w.terminated) })
 }
 
 func TestSelectContextRejectsUnreadableKubeconfig(t *testing.T) {

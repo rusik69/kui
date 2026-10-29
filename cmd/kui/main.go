@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,13 +90,22 @@ func run() int {
 		handler = web.WithAccessLog(handler, log.Default())
 	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("shut down HTTP server: %v", err)
-		}
-	}()
+	shutdownOnce := sync.Once{}
+	gracefulShutdown := func() {
+		shutdownOnce.Do(func() {
+			log.Printf("stopping HTTP server on %s", ln.Addr())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := server.Shutdown(ctx); err != nil {
+				// Long-lived streams and requests stalled on an unreachable
+				// cluster don't drain in time; close them so the process
+				// can exit.
+				log.Printf("shut down HTTP server: %v — closing remaining connections", err)
+				server.Close()
+			}
+		})
+	}
+	defer gracefulShutdown()
 
 	url := fmt.Sprintf("http://%s", ln.Addr())
 	log.Printf("starting HTTP server on %s", ln.Addr())
@@ -117,7 +127,50 @@ func run() int {
 			}
 		}
 	} else {
-		openDesktopWindow(webview.New(false), url)
+		// Desktop mode: the webview's Run blocks on the platform event loop
+		// and no signal handler was installed, so SIGINT/SIGTERM took the
+		// default disposition — and in environments where the window never
+		// opens (missing GTK/WebKitGTK), nothing could close the app at all.
+		// Handle signals here: terminate the event loop so Run returns, then
+		// fall through to the graceful server shutdown below. A watchdog
+		// forces the process to exit if the loop refuses to stop.
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		stop = cancel
+		w := webview.New(false)
+		if w == nil {
+			// webview creation failed (missing GTK 3/WebKitGTK on Linux, for
+			// example). Fall back to headless serving instead of crashing on
+			// a nil window with no way to close it.
+			log.Printf("could not create a native window (missing GTK 3/WebKitGTK?); serving headless — open the URL in a browser and stop kui with Ctrl+C")
+			fmt.Printf("kui listening on %s\n", url)
+			<-ctx.Done()
+		} else {
+			windowClosed := make(chan struct{})
+			go func() {
+				<-ctx.Done()
+				log.Printf("signal received; closing window and shutting down")
+				// webview's Terminate must run on the platform's main thread
+				// (on macOS, [NSApp stop:] from a background thread does not
+				// stop the run loop); Dispatch gets it there.
+				w.Dispatch(w.Terminate)
+			}()
+			go func() {
+				// Watchdog: if the window has not closed 15s after a signal,
+				// exit hard so the app can never linger. Normal close paths
+				// cancel this by closing windowClosed (see below).
+				<-ctx.Done()
+				select {
+				case <-windowClosed:
+				case <-time.After(15 * time.Second):
+					log.Printf("window did not close in time; exiting")
+					server.Close()
+					os.Exit(1)
+				}
+			}()
+			openDesktopWindow(w, url)
+			close(windowClosed)
+		}
 		select {
 		case err := <-serveErr:
 			if !errors.Is(err, http.ErrServerClosed) {
@@ -131,12 +184,7 @@ func run() int {
 	if stop != nil {
 		stop()
 	}
-	log.Printf("stopping HTTP server on %s", ln.Addr())
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shut down HTTP server: %v", err)
-	}
+	gracefulShutdown()
 	select {
 	case err := <-serveErr:
 		if !errors.Is(err, http.ErrServerClosed) {
@@ -153,6 +201,7 @@ type desktopWindow interface {
 	SetSize(int, int, webview.Hint)
 	Navigate(string)
 	Run()
+	Terminate()
 	Destroy()
 }
 

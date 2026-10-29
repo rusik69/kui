@@ -25,6 +25,13 @@ Open the printed `http://127.0.0.1:<port>` URL. Flags:
 - `--access-log` opt-in HTTP request logging (method, path, status, duration; no query string)
 - `--headless` run the HTTP server without a native window; it exits on SIGINT or SIGTERM
 
+Desktop mode handles SIGINT/SIGTERM too: the window closes and the server
+shuts down gracefully (streams and requests stalled on an unreachable
+cluster are force-closed after a 5-second grace period, so the app always
+exits). If the native window cannot be created (missing GTK 3/WebKitGTK on
+Linux), kui logs the reason and keeps serving headless instead of crashing
+with no way to close it.
+
 ### Rancher clusters
 
 Rancher can be set up two ways — from the UI or from flags. In the UI, open

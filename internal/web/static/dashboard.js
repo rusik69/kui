@@ -8,6 +8,10 @@
 	let refreshPending = false;
 	let refreshTimer = null;
 	let extrasRoot = null;
+	// Whether the customize panel is open. Overview fragments are re-rendered
+	// by htmx (load trigger and every SSE message), which would otherwise
+	// close the panel mid-interaction.
+	let settingsOpen = false;
 
 	function scopeKey(root) {
 		return "kui.overview.v1:" + encodeURIComponent(root.dataset.context || "") + ":" + encodeURIComponent(root.dataset.namespace || "_all");
@@ -52,6 +56,12 @@
 
 	function applySections(root, prefs) {
 		const panel = root.querySelector("#overview-settings-panel");
+		if (panel && settingsOpen) {
+			// The panel is server-rendered hidden; a swap replacing #overview must
+			// not close it out from under the user (or a test) interacting with it.
+			panel.hidden = false;
+			root.querySelector("#overview-settings-button")?.setAttribute("aria-expanded", "true");
+		}
 		root.querySelectorAll("[data-overview-section]").forEach((section) => {
 			const name = section.dataset.overviewSection;
 			section.hidden = prefs.hidden.includes(name);
@@ -164,12 +174,13 @@
 	function toggleSettings(root, button) {
 		const panel = root.querySelector("#overview-settings-panel");
 		if (!panel) return;
-		panel.hidden = !panel.hidden;
-		button.setAttribute("aria-expanded", String(!panel.hidden));
+		settingsOpen = panel.hidden;
+		panel.hidden = !settingsOpen;
+		button.setAttribute("aria-expanded", String(settingsOpen));
 		root.querySelectorAll("[data-overview-section]").forEach((section) => {
-			section.draggable = !panel.hidden;
+			section.draggable = settingsOpen;
 		});
-		if (!panel.hidden) panel.querySelector("input,button")?.focus();
+		if (settingsOpen) panel.querySelector("input,button")?.focus();
 	}
 
 	document.addEventListener("click", (event) => {

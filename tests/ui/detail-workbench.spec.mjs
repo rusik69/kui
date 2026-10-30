@@ -53,7 +53,6 @@ test("YAML drafts are scoped and bounded; validation reports server parsing fail
   const serverYAML = await editor.inputValue();
   await editor.fill(`${serverYAML}\n# local workbench draft`);
   await expect(page.locator("#yaml-dirty-status")).toContainText("Local draft saved");
-  await page.reload();
   await page.goto(app.url);
   await openResource(page, "pods");
   await openDetail(page, "pods", "alpha");
@@ -231,7 +230,6 @@ test("terminal zoom is bounded and persistent; fullscreen exits and clear protec
   await page.getByRole("button", { name: "Clear terminal" }).click();
   await expect(page.locator("#term-pane")).not.toContainText("terminal-output-marker");
 
-  await page.reload();
   await page.goto(app.url);
   await openResource(page, "pods");
   await openDetail(page, "pods", "alpha");

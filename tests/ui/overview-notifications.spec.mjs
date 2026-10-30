@@ -133,9 +133,22 @@ test("malformed notification storage is discarded without breaking the center", 
 test("new events use a toast when quiet mode is off", async ({ page }) => {
   const context = await page.locator("#overview").getAttribute("data-context");
   const key = `kui.notifications.v1:${encodeURIComponent(context)}:dev`;
-  await page.evaluate(storageKey => localStorage.setItem(storageKey, JSON.stringify({ items: [], severities: ["Normal", "Warning"], quiet: false })), key);
+  // Reset storage in an init script: it runs before any app script on the
+  // reloaded page, so an in-flight ingest from the previous page cannot
+  // repopulate the items after the reset (which would dedupe everything and
+  // skip the toast). Toasts are removed after 4 seconds and a loaded machine
+  // can miss that window, so record toast events instead — the application
+  // contract is that ingestion announces itself once. body is not parsed yet
+  // when the init script runs, hence the DOMContentLoaded fallback.
+  await page.addInitScript(storageKey => {
+    localStorage.setItem(storageKey, JSON.stringify({ items: [], severities: ["Normal", "Warning"], quiet: false }));
+    window.__kuiToasts = [];
+    const install = () => document.body.addEventListener("toast", (e) => window.__kuiToasts.push(e.detail?.toast?.message || ""), { capture: true });
+    if (document.body) install();
+    else document.addEventListener("DOMContentLoaded", install, { once: true });
+  }, key);
   await page.reload();
-  await expect(page.locator("#toast-container .toast").filter({ hasText: "added to notifications" })).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => (window.__kuiToasts || []).filter((m) => m.includes("added to notifications")).length)).toBe(1);
   await expect.poll(() => page.locator("#notification-list li").count()).toBeGreaterThan(0);
 });
 test("event summaries expand into matching live event records", async ({ page }) => {

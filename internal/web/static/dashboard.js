@@ -12,6 +12,10 @@
 	// by htmx (load trigger and every SSE message), which would otherwise
 	// close the panel mid-interaction.
 	let settingsOpen = false;
+	// Unsaved overview edits, preserved across fragment re-renders so a swap
+	// cannot wipe them mid-interaction.
+	let thresholdDraft = null;
+	let eventFilterText = "";
 
 	function scopeKey(root) {
 		return "kui.overview.v1:" + encodeURIComponent(root.dataset.context || "") + ":" + encodeURIComponent(root.dataset.namespace || "_all");
@@ -381,7 +385,9 @@
 		try { thresholds = JSON.parse(localStorage.getItem(thresholdKey(root)) || "{}"); } catch {}
 		function thresholdRender() {
 			const name = metric?.value || "cpu", value = Number(thresholds[name] || 80);
-			if (threshold) threshold.value = String(value);
+			// A re-render must not clobber an unsaved edit: the draft survives
+			// swaps until it is saved (or replaced by the next edit).
+			if (threshold) threshold.value = String(thresholdDraft !== null ? thresholdDraft : value);
 			const bar = root.querySelectorAll(".capacity-bar")[["cpu","memory","pods"].indexOf(name)];
 			const percent = Number(bar?.querySelector(".capacity-label span:last-child")?.textContent || 0);
 			const warning = root.querySelector("#capacity-threshold-warning");
@@ -389,23 +395,33 @@
 			bar?.querySelector(".bar-fill")?.classList.toggle("bar-fill-warning", percent >= value);
 		}
 		metric?.addEventListener("change", thresholdRender);
+		threshold?.addEventListener("input", () => { thresholdDraft = threshold.value; });
 		root.querySelector("#capacity-threshold-save")?.addEventListener("click", () => {
 			const value = Number(threshold?.value);
 			if (!Number.isInteger(value) || value < 1 || value > 100) { threshold?.setAttribute("aria-invalid", "true"); threshold?.focus(); return; }
 			threshold?.removeAttribute("aria-invalid"); thresholds[metric.value] = value;
+			thresholdDraft = null;
 			try { localStorage.setItem(thresholdKey(root), JSON.stringify(thresholds)); } catch {}
 			thresholdRender();
 		});
-		thresholdRender();
+		if (thresholdDraft !== null && threshold) threshold.value = String(thresholdDraft); else thresholdRender();
 		const filter = root.querySelector("#event-summary-filter");
+		if (filter && eventFilterText) {
+			filter.value = eventFilterText;
+			applyEventFilter(filter);
+		}
 		filter?.addEventListener("input", () => {
-			const query = filter.value.toLocaleLowerCase();
+			eventFilterText = filter.value;
+			applyEventFilter(filter);
+		});
+		function applyEventFilter(input) {
+			const query = input.value.toLocaleLowerCase();
 			root.querySelectorAll("[data-event-group]").forEach(row => {
 				row.hidden = !row.dataset.search.toLocaleLowerCase().includes(query);
 				const details = row.nextElementSibling;
 				if (details?.classList.contains("event-group-records") && row.hidden) details.hidden = true;
 			});
-		});
+		}
 		root.querySelectorAll(".event-group-expand").forEach(button => button.addEventListener("click", () => {
 			const row = button.closest("[data-event-group]"), details = row?.nextElementSibling;
 			if (!details?.classList.contains("event-group-records")) return;

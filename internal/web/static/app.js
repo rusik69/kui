@@ -943,8 +943,12 @@ window.kui = (function () {
 		const params = new URLSearchParams(location.search);
 		const filterInput = document.getElementById("row-filter");
 		const colInput = document.getElementById("column-filter");
-		if (filterInput) filterInput.value = params.get("rowFilter") || "";
-		if (colInput) colInput.value = params.get("columnFilter") || "";
+		// A swap triggered right after a keystroke must not revert the filter
+		// the user (or a test) is actively editing; the input event will sync
+		// the URL via table_workbench's syncExplorerURL.
+		const editingFilter = filterInput && (document.activeElement === filterInput || document.activeElement === colInput);
+		if (filterInput && !editingFilter) filterInput.value = params.get("rowFilter") || "";
+		if (colInput && !editingFilter) colInput.value = params.get("columnFilter") || "";
 		const lp = findListPane(document);
 		if (!lp) return;
 		lp.dataset.sortKey = params.get("sortColumn") || "";

@@ -109,13 +109,17 @@ test("selected JSON downloads structured values and TSV copies quoted cell value
   expect(json).toHaveLength(1);
   expect(json[0]).toMatchObject({ namespace: "dev", Name: "alpha" });
   expect(json[0].id).toContain("/pods/alpha");
-  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.getByRole("button", { name: "Copy selected TSV" }).click();
-  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('"Name"');
-  const tsv = await page.evaluate(() => navigator.clipboard.readText());
-  expect(tsv).toContain('"alpha"');
-  expect(tsv.split("\r\n")).toHaveLength(2);
-  expect(tsv).not.toContain("Copy resource name");
+  // Playwright WebKit cannot grant clipboard permissions; Chromium asserts the copied payloads.
+  const canReadClipboard = page.context().browser()?.browserType().name() !== "webkit";
+  if (canReadClipboard) {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.getByRole("button", { name: "Copy selected TSV" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('"Name"');
+    const tsv = await page.evaluate(() => navigator.clipboard.readText());
+    expect(tsv).toContain('"alpha"');
+    expect(tsv.split("\r\n")).toHaveLength(2);
+    expect(tsv).not.toContain("Copy resource name");
+  }
   await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("denied"); } } }));
   await page.getByRole("button", { name: "Copy selected TSV" }).click();
   await expect(page.locator("#kui-explorer-status")).toContainText("Clipboard access was denied");

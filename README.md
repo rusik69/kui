@@ -16,7 +16,7 @@ go run ./cmd/kui
 
 Open the printed `http://127.0.0.1:<port>` URL. Flags:
 
-- `--kubeconfig` path to a kubeconfig file **or a directory** of kubeconfig files (`*.yaml`, `*.yml`, `*.json`; hidden files ignored; defaults to `$KUBECONFIG` / `~/.kube/config`). A directory is re-scanned live — files can be added, edited, or removed while kui runs
+- `--kubeconfig` path to a kubeconfig file **or a directory** of kubeconfig files (`*.yaml`, `*.yml`, `*.json`; hidden files ignored; defaults to `$KUBECONFIG` / `~/.kube/config`). A directory is re-scanned live — files can be added, edited, or removed while kui runs. The same directory can be set at runtime in the settings dialog, where it is persisted
 - `--addr` TCP listen address (default `127.0.0.1:0`, loopback/free port; external binds require network protections)
 - `--context` and `--namespace` override the initial kubeconfig defaults
 - `--rancher-url` import cluster kubeconfigs from a Rancher management server (or set `KUI_RANCHER_URL`; can also be configured in the UI via the top-bar gear button)
@@ -43,6 +43,12 @@ Rancher cluster you can access, named `rancher/<cluster name>`. They appear in
 the top-bar context switcher and the search palette like any other context;
 picking one browses the cluster through Rancher's generated kubeconfig.
 
+The same settings dialog also takes a **kubeconfig directory**: point it at a
+folder of kubeconfig files and every context from every file is merged into
+the context switcher, live-reloaded as files change — the same behavior as
+the `--kubeconfig <dir>` flag, but set at runtime and persisted. A
+`--kubeconfig` flag at startup wins over the saved directory for that process.
+
 ```sh
 KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.example.com
 ```
@@ -52,12 +58,14 @@ KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.exam
 - Contexts refresh from Rancher every 5 minutes; a generated kubeconfig is
   reused for 1 hour. Tokens Rancher embeds expire per the server's
   `kubeconfig-default-token-ttl-minutes` setting (default 30 days).
-- Connections saved in the UI persist to `settings.json` in the user config
-  directory (`~/Library/Application Support/kui`, `~/.config/kui`,
-  `%AppData%\kui`; override with `KUI_CONFIG_DIR`), written with owner-only
-  permissions, and are restored on the next start. CLI flags and environment
-  variables win over the file for the current process but are not persisted.
-  Disconnecting from the UI clears the saved entry.
+- Settings saved in the UI — the Rancher connection **and** the kubeconfig
+  directory — persist to `settings.json` in the user config directory
+  (`~/Library/Application Support/kui`, `~/.config/kui`, `%AppData%\kui`;
+  override with `KUI_CONFIG_DIR`), written with owner-only permissions, and are
+  restored on the next start. CLI flags and environment variables win over the
+  file for the current process but are not persisted. Disconnecting from the UI
+  clears the saved Rancher entry; clearing the directory field restores the
+  default kubeconfig.
 - The settings file and the kubeconfig are never modified by imports beyond
   that; the token is never returned by the API — responses only say whether
   one is saved.
@@ -138,7 +146,9 @@ WebKit webview; it needs no separately installed webview runtime.
 
 - Switch kubeconfig contexts/namespaces from the top bar, search namespaces, and
   retain each tab's context/namespace on refresh. Kubeconfig edits reload contexts
-  and rebuild cached clients. Clusters from a Rancher server (`--rancher-url`)
+  and rebuild cached clients. A directory of kubeconfig files (`--kubeconfig <dir>`
+  or the settings dialog) merges every file's contexts into the same switcher.
+  Clusters from a Rancher server (`--rancher-url`)
   appear as extra `rancher/<name>` contexts in the same switcher.
 
 - Use keyboard-operable dialogs and pane resizing; the interface adapts to narrow
@@ -192,7 +202,9 @@ probes the Kubernetes API.
 - **No usable context:** repair the kubeconfig or pass `--context NAME`.
   `--kubeconfig` overrides the default file and `$KUBECONFIG`. With
   `--rancher-url` set, imported `rancher/<name>` contexts are also available;
-  if kui starts with no context selected it picks the first one.
+  if kui starts with no context selected it picks the first one. The settings
+  dialog (gear button) can bootstrap everything from the browser: set a
+  kubeconfig directory or connect Rancher without restarting kui.
 - **Cluster unreachable:** check VPN/network access and the selected context's
   API server address and certificate settings. The page shell remains usable
   when cluster requests fail; the status bar and inline connection error show

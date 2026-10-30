@@ -39,7 +39,6 @@ type rancherSettingsResponse struct {
 	KubeconfigDir string `json:"kubeconfigDir,omitempty"`
 }
 
-const rancherTokenEnvVar = "KUI_RANCHER_TOKEN"
 const rancherURLBodyLimit = 1 << 10
 const rancherTokenBodyLimit = 4 << 10
 
@@ -214,13 +213,6 @@ func (s *Server) handleRancherRemove(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.setRancherSource(nil, "", "")
 	writeJSON(w, http.StatusOK, rancherSettingsResponse{})
-}
-
-// activeToken returns the in-memory token for the active source.
-func (s *Server) activeToken() string {
-	s.rancherMu.RLock()
-	defer s.rancherMu.RUnlock()
-	return s.rancherToken
 }
 
 // activeSourceKind returns where the active Rancher settings came from.

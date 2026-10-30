@@ -860,13 +860,13 @@ test("overview metric links render their actual resource or event filter scope",
 
   await page.goto(app.url);
   await page.locator('[data-overview-tile="pending"] a.stat-tile-link').click();
-  await expect(page.locator("#list-pane #kui-table tbody tr[data-name]")).toHaveCount(1);
-  await expect(page.locator("#list-pane #kui-table tbody tr[data-name]").first()).toHaveAttribute("data-name", "pending-pod");
+  // poll: the swap plus the list-pane re-fetch are two round trips; a bare
+  // toHaveCount also passes on a leftover table from the previous tile.
+  await expect.poll(() => page.locator("#list-pane #kui-table tbody tr[data-name]").evaluateAll((rows) => rows.map((row) => row.dataset.name))).toEqual(["pending-pod"]);
 
   await page.goto(app.url);
   await page.locator('[data-overview-tile="failed"] a.stat-tile-link').click();
-  await expect(page.locator("#list-pane #kui-table tbody tr[data-name]")).toHaveCount(1);
-  await expect(page.locator("#list-pane #kui-table tbody tr[data-name]").first()).toHaveAttribute("data-name", "failed-pod");
+  await expect.poll(() => page.locator("#list-pane #kui-table tbody tr[data-name]").evaluateAll((rows) => rows.map((row) => row.dataset.name))).toEqual(["failed-pod"]);
   await expect(page.locator("#list-pane #kui-table")).not.toContainText("crashy");
 
   await page.goto(app.url);

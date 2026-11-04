@@ -65,7 +65,7 @@
         <span class="kbd-hint">&#8984;K</span>
       </button>
       <input type="search" placeholder="Filter resources…" id="row-filter" aria-label="Filter current resource table" oninput="kui.filterRows(this.value)" onkeydown="if(event.key==='Escape'){kui.clearRowFilter()}">
-      <button id="theme-toggle" type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" aria-pressed="false" onclick="kui.toggleTheme()">
+      <button id="theme-toggle" type="button" class="icon-btn" title="Toggle theme" aria-label="Toggle color theme" aria-pressed="false">
         <svg class="icon" id="theme-icon"><use href="#icon-moon"/></svg>
       </button>
       <button id="rancher-button" type="button" class="icon-btn" title="Rancher settings" aria-label="Rancher settings" aria-haspopup="dialog" onclick="kuiRancher.open()">

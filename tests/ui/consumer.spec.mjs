@@ -186,7 +186,13 @@ test("detail tabs are keyboard-operable and resizing survives HTMX swaps", async
   await expect(bravo).toBeVisible();
 });
 
-test("theme changes are visible and persist across a reload", async ({ page }) => {
+test("theme changes are visible and persist across a reload", async ({ app, browser }) => {
+  // The default appearance mode is "system": pin the emulated color scheme so
+  // the initial resolved theme is deterministic across environments.
+  const context = await browser.newContext({ colorScheme: "dark" });
+  const page = await context.newPage();
+  await page.goto(app.url);
+  await expect(page.locator("#content")).toContainText("Cluster Overview");
   const root = page.locator("html");
   const toggle = page.getByRole("button", { name: "Toggle color theme" });
   await expect(root).toHaveAttribute("data-theme", "dark");
@@ -406,7 +412,13 @@ test("deployment pause, resume, and selected-revision rollback change live state
   await expect(page.locator("#deployment-replicas-status")).not.toContainText("Paused");
 });
 
-test("overview exposes live fixture health and stays usable at a narrow viewport", async ({ page }) => {
+test("overview exposes live fixture health and stays usable at a narrow viewport", async ({ app, browser }) => {
+  // Pin the emulated color scheme so the toggle's from-state is deterministic
+  // (the default appearance mode is "system").
+  const context = await browser.newContext({ colorScheme: "dark", viewport: { width: 1280, height: 720 } });
+  const page = await context.newPage();
+  await page.goto(app.url);
+  await expect(page.locator("#content")).toContainText("Cluster Overview");
   await expect(page.locator("#content .stat-tile")).toHaveCount(6);
   await expect(page.locator("#content")).toContainText("Warning");
   await page.setViewportSize({ width: 320, height: 760 });

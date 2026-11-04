@@ -196,10 +196,11 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 .workspace-overflow { position: relative; }
 .workspace-tab { position: relative; }
 .workspace-menu {
-	position: absolute;
-	top: 100%;
-	right: 0;
+	/* Positioned with fixed coordinates in JS (placeMenuBelow): the strip is
+	   an overflow-clipped scroll container, so absolute dropdowns get cut. */
 	z-index: 30;
+	visibility: hidden;
+
 	display: grid;
 	min-width: 11rem;
 	padding: 4px;
@@ -209,6 +210,7 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 	box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
 }
 .workspace-menu[hidden] { display: none; }
+.workspace-menu:not([hidden]) { visibility: visible; }
 .workspace-menu button {
 	border: 0;
 	background: transparent;

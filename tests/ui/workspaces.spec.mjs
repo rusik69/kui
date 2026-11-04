@@ -40,6 +40,14 @@ test("workspace controls rename, pin, duplicate, reorder and reopen tabs", async
   await overflow.click();
   const duplicate = strip.getByRole("menuitem", { name: "Duplicate workspace" });
   await expect(duplicate).toBeAttached();
+  // The menu must escape the strip's overflow clipping: fully inside the
+  // viewport, below the trigger.
+  await expect(duplicate).toBeVisible();
+  await expect.poll(async () => page.evaluate(() => {
+    const menu = document.querySelector(".workspace-overflow .workspace-menu");
+    const rect = menu.getBoundingClientRect();
+    return rect.top > 0 && rect.bottom <= window.innerHeight && rect.width > 0;
+  })).toBe(true);
   await duplicate.click();
   await expect(strip.getByRole("tab")).toHaveCount(3);
   const second = strip.locator(".workspace-tab").nth(1).getByRole("tab");

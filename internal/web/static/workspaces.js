@@ -110,6 +110,29 @@
     persist();
   }
 
+  // placeMenuBelow positions a menu with position:fixed right under its
+  // trigger. The strip and its tab list are scroll containers with
+  // overflow clipping, so an absolutely positioned dropdown would be cut
+  // off; fixed coordinates escape both. Re-computed on every open (and on
+  // scroll/resize while open) so the menu tracks its trigger.
+  function placeMenuBelow(trigger, menu) {
+    const place = () => {
+      if (menu.hidden) return;
+      const rect = trigger.getBoundingClientRect();
+      menu.style.position = "fixed";
+      menu.style.top = `${Math.round(rect.bottom + 4)}px`;
+      const right = Math.round(window.innerWidth - rect.right);
+      menu.style.right = `${Math.max(0, right)}px`;
+      menu.style.left = "auto";
+    };
+    place();
+    if (!menu.dataset.tracked) {
+      menu.dataset.tracked = "1";
+      window.addEventListener("scroll", place, true);
+      window.addEventListener("resize", place);
+    }
+  }
+
   // makeOverflowMenu tucks the secondary workspace actions (duplicate, close
   // others/unpinned, reopen) behind one "…" button so the strip stays a row
   // of tabs, not a toolbar.
@@ -119,6 +142,7 @@
     const trigger = makeButton("More workspace actions", "…", () => {
       const menu = wrapper.querySelector(".workspace-menu");
       const open = menu.hidden;
+      if (open) placeMenuBelow(trigger, menu);
       menu.hidden = !open;
       trigger.setAttribute("aria-expanded", String(open));
       if (open) menu.querySelector("button")?.focus();
@@ -181,6 +205,7 @@
     const more = makeButton(`More actions for tab ${index + 1}`, "…", () => {
       const menu = wrapper.querySelector(".workspace-menu");
       const open = menu.hidden;
+      if (open) placeMenuBelow(more, menu);
       menu.hidden = !open;
       more.setAttribute("aria-expanded", String(open));
       if (open) menu.querySelector("button")?.focus();

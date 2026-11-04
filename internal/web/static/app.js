@@ -1828,14 +1828,6 @@ window.kui = (function () {
 		setThemeIcon(document.documentElement.getAttribute("data-theme") || "dark");
 	}
 
-	function toggleTheme() {
-		const current = document.documentElement.getAttribute("data-theme") || "dark";
-		const next = current === "dark" ? "light" : "dark";
-		document.documentElement.setAttribute("data-theme", next);
-		localStorage.setItem("kui.theme", next);
-		setThemeIcon(next);
-	}
-
 	// ---- secret value reveal ----
 
 	// Secret values are already present in the page (as base64, in a
@@ -2359,7 +2351,6 @@ window.kui = (function () {
 		openPalette,
 		closePalette,
 		recordRecent,
-		toggleTheme,
 		applyResourceSelectors,
 		toggleSecretValue,
 		nextResourcePage,

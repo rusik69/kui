@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"html/template"
 	"net/http"
 	"strings"
 
@@ -196,10 +197,13 @@ func (s *Server) handleResourceCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	triggerToast(w, "success", fmt.Sprintf("%s %q created in %s", rk.Kind, created.GetName(), displayScope(created)))
-	// Return the detail URL so the client can open the created object.
-	target := resourcePath(ctxName, created.GetNamespace(), rk.Name, created.GetName())
+	// Return the detail URL so the client can open the created object. Every
+	// interpolated value is HTML-escaped: object names are cluster-controlled
+	// data and this fragment is inserted into the dialog via innerHTML.
+	target := template.HTMLEscapeString(resourcePath(ctxName, created.GetNamespace(), rk.Name, created.GetName()))
+	name := template.HTMLEscapeString(created.GetName())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<span class="dot dot-green"></span> created <a href="%s" hx-get="%s" hx-target="#detail-pane" hx-swap="innerHTML" hx-push-url="%s">%s</a>`, target, target, target, created.GetName())
+	fmt.Fprintf(w, `<span class="dot dot-green"></span> created <a href="%s" hx-get="%s" hx-target="#detail-pane" hx-swap="innerHTML" hx-push-url="%s">%s</a>`, target, target, target, name)
 }
 
 func displayScope(obj *unstructured.Unstructured) string {

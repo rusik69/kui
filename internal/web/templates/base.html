@@ -142,6 +142,28 @@
     </div>
   </form>
 </dialog>
+<dialog id="create-dialog" class="rancher-dialog create-dialog" aria-labelledby="create-dialog-title">
+  <form method="dialog" class="rancher-heading">
+    <h2 id="create-dialog-title">Create <span id="create-dialog-kind">resource</span></h2>
+    <button type="submit" aria-label="Close create dialog" data-tooltip="Close">×</button>
+  </form>
+  <form id="create-form">
+    <p class="create-hint" id="create-hint">
+      Edit the starter manifest, then validate it (server-side dry-run) or create the object.
+      Press <kbd>Cmd/Ctrl+Enter</kbd> to create.
+    </p>
+    <div class="yaml-editor-wrap create-editor-wrap"><pre id="create-line-numbers" aria-hidden="true">1</pre><textarea id="create-editor" class="yaml-editor" name="yaml" spellcheck="false" wrap="off" aria-label="New resource manifest"></textarea></div>
+    <p class="rancher-status" id="create-status" role="status" aria-live="polite"></p>
+    <div class="rancher-actions">
+      <label class="create-namespace-label">Namespace
+        <select id="create-namespace" aria-label="Namespace for the new resource"></select>
+      </label>
+      <span class="create-actions-spacer"></span>
+      <button type="button" class="btn" id="create-validate">Validate</button>
+      <button type="button" class="btn btn-primary" id="create-submit">Create</button>
+    </div>
+  </form>
+</dialog>
 <div class="statusbar" id="statusbar" data-watch-state="connecting">
   <span id="cluster-status" hx-get="/c/{{.Context}}/status?ns={{.Namespace}}" hx-trigger="load, every 3s" hx-swap="innerHTML" data-cluster-state="loading">
     Loading cluster status…
@@ -157,6 +179,7 @@
 <script src="/static/workspaces.js"></script>
 <script src="/static/appearance.js"></script>
 <script src="/static/rancher.js"></script>
+<script src="/static/create.js"></script>
 <script src="/static/accessibility.js"></script>
 </body>
 </html>

@@ -169,6 +169,33 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 	.rancher-actions { display: grid; grid-template-columns: 1fr 1fr; }
 	.rancher-actions .rancher-remove { margin-right: 0; }
 }
+/* Create-resource dialog: reuses the settings dialog chrome, wider for the
+   manifest editor, with the same editor look as the detail YAML tab. */
+.create-dialog {
+	width: min(760px, calc(100vw - 24px));
+	max-height: min(92vh, 860px);
+	display: flex;
+	flex-direction: column;
+}
+.create-dialog[open] { display: flex; }
+.create-dialog form { display: flex; flex-direction: column; min-height: 0; }
+.create-hint { margin: 0 0 10px; color: var(--text-dim); font-size: .92em; }
+.create-editor-wrap { min-height: 220px; max-height: 46vh; overflow: auto; display: flex; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.create-editor-wrap .yaml-editor { flex: 1; min-height: 220px; border: 0; border-radius: 0; resize: vertical; }
+.create-dialog .rancher-status { margin: 10px 0 0; }
+.create-dialog .rancher-status a { color: var(--accent); }
+.create-dialog .rancher-actions { align-items: center; flex-wrap: wrap; }
+.create-dialog .rancher-actions .btn:disabled { opacity: .55; cursor: progress; }
+.create-namespace-label { display: flex !important; align-items: center; gap: 8px; margin-right: auto; font-weight: 600; }
+.create-namespace-label select { min-height: 34px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
+.create-actions-spacer { display: none; }
+.table-create-button { white-space: nowrap; }
+.table-create-button .icon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+@media (forced-colors: active) {
+	.create-dialog, .create-dialog input, .create-dialog select, .create-editor-wrap { border: 1px solid ButtonText; }
+	.create-dialog { color: CanvasText; background: Canvas; }
+	.create-dialog::backdrop { background: Canvas; opacity: .85; }
+}
 .appearance-dialog {
 	width: min(460px, calc(100vw - 24px));
 	max-height: min(90vh, 720px);

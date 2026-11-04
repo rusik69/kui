@@ -312,6 +312,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/{resource}", s.handleResourceList)
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/{resource}/{name}", s.handleResourceDetail)
+	s.mux.HandleFunc("GET /c/{ctx}/{ns}/{resource}/new", s.handleResourceScaffold)
+	s.mux.HandleFunc("POST /c/{ctx}/{ns}/{resource}/new", s.protectMutation(s.handleResourceCreate))
 	s.mux.HandleFunc("PUT /c/{ctx}/{ns}/{resource}/{name}/yaml", s.protectMutation(s.handleYAMLApply))
 	s.mux.HandleFunc("PUT /c/{ctx}/{ns}/{resource}/{name}/yaml/diff", s.protectMutation(s.handleYAMLDiff))
 	s.mux.HandleFunc("DELETE /c/{ctx}/{ns}/{resource}/{name}", s.protectMutation(s.handleResourceDelete))

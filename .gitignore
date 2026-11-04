@@ -4,3 +4,5 @@
 /kui
 node_modules/
 coverage.out
+test-results/
+playwright-report/

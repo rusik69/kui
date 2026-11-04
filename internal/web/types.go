@@ -55,6 +55,9 @@ type TableData struct {
 	ResourceVersion   string
 	NextContinue      string
 	NextPageURL       string
+	// CreateURL is the scaffold endpoint for the Create dialog ("" when
+	// creating is not offered, e.g. the All-resources directory).
+	CreateURL string
 }
 
 // Condition is one status condition shown in the Details tab.

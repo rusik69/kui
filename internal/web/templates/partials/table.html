@@ -2,6 +2,7 @@
 <div class="toolbar" data-resource-version="{{.ResourceVersion}}">
   <strong>{{.Kind}}</strong>
   <span class="sidebar-count">{{len .Rows}}</span>
+  {{if .CreateURL}}<button type="button" class="btn btn-primary table-create-button" aria-haspopup="dialog" data-create-url="{{.CreateURL}}" data-kind="{{.Kind}}" onclick="kuiCreate.open(this.dataset.createUrl, this.dataset.kind, this)"><svg class="icon"><use href="#icon-plus"/></svg>Create {{.Kind}}</button>{{end}}
 </div>
 {{if .DiscoveryWarning}}<div class="warning-state" role="status">{{.DiscoveryWarning}}</div>{{end}}
 {{if .Selectable}}

@@ -252,6 +252,7 @@ func (s *Server) buildTableData(ctx context.Context, c *k8s.Clients, rk k8s.Reso
 		PageSize:          options.Limit,
 		NextContinue:      list.GetContinue(),
 		ResourceVersion:   list.GetResourceVersion(),
+		CreateURL:         fmt.Sprintf("/c/%s/%s/%s/new", ctxName, nsOrDash(ns), rk.Name),
 	}, nil
 }
 

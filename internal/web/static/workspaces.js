@@ -375,6 +375,39 @@
       element?.id === "yaml-editor";
   }
 
+  // openInNewTab turns a middle-click or Cmd/Ctrl+click on any in-app link
+  // (resource rows, sidebar links, palette results) into a new background
+  // workspace tab instead of a browser tab, keeping the session inside kui.
+  // Plain clicks are untouched, so htmx navigation keeps working.
+  function openInNewTab(element) {
+    const link = element.closest("[data-id], [href], [hx-get]");
+    if (!link) return false;
+    // The All-resources kinds directory uses data-id for navigation too.
+    const raw = link.getAttribute("data-id") || link.getAttribute("href") || link.getAttribute("hx-get");
+    const route = safeRoute(raw);
+    if (!route) return false;
+    createTab(route);
+    announceTabCreated(route);
+    return true;
+  }
+
+  function announceTabCreated(route) {
+    const parts = route.split(/[?#]/, 1)[0].split("/").filter(Boolean).map(part => decodeURIComponent(part));
+    const title = parts.slice(2).join(" · ") || parts[1] || "Workspace";
+    const announcement = document.getElementById("workspace-announcement");
+    if (announcement) announcement.textContent = `Opened ${title} in a new workspace tab.`;
+  }
+
+  function handleAuxClick(event) {
+    if (event.button !== 1 || event.shiftKey || event.altKey) return;
+    if (openInNewTab(event.target)) event.preventDefault();
+  }
+
+  function handleModifiedClick(event) {
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.button !== 0) return;
+    if (openInNewTab(event.target)) event.preventDefault();
+  }
+
   function cancelPendingSave(message) {
     pendingSaveClose = null;
     const status = document.getElementById("workspace-save-status");
@@ -393,6 +426,8 @@
   function init() {
     render();
     setupSidebar();
+    document.addEventListener("auxclick", handleAuxClick, true);
+    document.addEventListener("click", handleModifiedClick, true);
     window.addEventListener("popstate", updateRoute);
     document.addEventListener("htmx:pushedIntoHistory", updateRoute, true);
     document.addEventListener("htmx:afterSettle", handleSettle, true);

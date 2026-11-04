@@ -340,6 +340,39 @@ export async function startFakeKubernetes() {
       return;
     }
 
+    if (request.method === "POST" && !name) {
+      // Server-side dry-run (?dryRun=All): validate without persisting.
+      if (url.searchParams.get("dryRun") === "All") {
+        let dryBody = "";
+        for await (const chunk of request) dryBody += chunk;
+        try { record.body = dryBody ? JSON.parse(dryBody) : {}; } catch { record.body = dryBody; }
+        const manifest = record.body || {};
+        if (!manifest.metadata?.name) return sendJSON(response, 422, statusObject(422, "Invalid", "metadata.name is required", ""));
+        if (manifest.metadata.name === "rejected") return sendJSON(response, 422, statusObject(422, "Invalid", "fixture rejects this manifest", manifest.metadata.name));
+        return sendJSON(response, 201, clone(manifest));
+      }
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      try { record.body = body ? JSON.parse(body) : {}; } catch { record.body = body; }
+      const manifest = record.body || {};
+      const createdName = manifest.metadata?.name || "";
+      if (!createdName) return sendJSON(response, 422, statusObject(422, "Invalid", "metadata.name is required", ""));
+      if ((objects[resource] || []).some((candidate) => candidate.metadata.name === createdName && (!namespace || !candidate.metadata.namespace || candidate.metadata.namespace === namespace))) {
+        return sendJSON(response, 409, statusObject(409, "AlreadyExists", `${resource} ${createdName} already exists`, createdName));
+      }
+      if (createdName === "rejected") return sendJSON(response, 422, statusObject(422, "Invalid", "fixture rejects this manifest", createdName));
+      const created = clone(manifest);
+      created.apiVersion = created.apiVersion || apiVersionFor(resourcePath.group, resourcePath.version);
+      created.kind = created.kind || (resourceDefs(resourcePath.group, resourcePath.version).find(([key]) => key === resource) || ["", resource])[1];
+      created.metadata = created.metadata || {};
+      created.metadata.uid = created.metadata.uid || `fixture-${createdName}`;
+      created.metadata.resourceVersion = "1";
+      created.metadata.creationTimestamp = "2024-02-03T04:05:06Z";
+      if (namespace && !created.metadata.namespace) created.metadata.namespace = namespace;
+      (objects[resource] ||= []).push(created);
+      return sendJSON(response, 201, created);
+    }
+
     if (request.method === "GET" && !name) {
       let items = (objects[resource] || []).filter((candidate) => !namespace || !candidate.metadata.namespace || candidate.metadata.namespace === namespace);
       items = items.filter((candidate) => selectorMatches(candidate, url.searchParams.get("labelSelector") || "", false));

@@ -58,6 +58,13 @@
       button.setAttribute('aria-expanded', String(expand)); $(`#${CSS.escape(button.getAttribute('aria-controls'))}`).hidden = !expand;
     });
     saveCollapsed();
+    // One toggle instead of Expand/Collapse button pair: keep the label and
+    // state on the single button in the detail header.
+    const toggle = document.getElementById('sections-toggle');
+    if (toggle) {
+      toggle.dataset.expanded = String(expand);
+      toggle.textContent = expand ? 'Collapse all sections' : 'Expand all sections';
+    }
   }
   function copyIdentity() {
     const h = header(); if (!h) return;

@@ -96,13 +96,7 @@
     state.tabs.forEach((tab, index) => list.append(makeTab(tab, index, list)));
     strip.append(list);
     strip.append(makeButton("New workspace tab", "+", () => createTab(currentRoute())));
-    strip.append(makeButton("Duplicate workspace", "Duplicate", () => createTab(state.tabs[state.active].route)));
-    strip.append(makeButton("Close other workspaces", "Close others", closeOthers));
-    strip.append(makeButton("Close unpinned workspaces", "Close unpinned", closeUnpinned));
-    strip.append(makeButton("Reopen closed workspace", "Reopen closed", reopen));
-    const scroll = makeButton("Scroll workspace tabs right", "›", () => list.scrollBy({ left: 160, behavior: "smooth" }));
-    scroll.className = "workspace-scroll";
-    strip.append(scroll);
+    strip.append(makeOverflowMenu());
     const announcement = document.createElement("span");
     announcement.id = "workspace-announcement";
     announcement.className = "sr-only";
@@ -114,6 +108,51 @@
     saveStatus.setAttribute("aria-live", "polite");
     strip.append(saveStatus);
     persist();
+  }
+
+  // makeOverflowMenu tucks the secondary workspace actions (duplicate, close
+  // others/unpinned, reopen) behind one "…" button so the strip stays a row
+  // of tabs, not a toolbar.
+  function makeOverflowMenu() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "workspace-overflow";
+    const trigger = makeButton("More workspace actions", "…", () => {
+      const menu = wrapper.querySelector(".workspace-menu");
+      const open = menu.hidden;
+      menu.hidden = !open;
+      trigger.setAttribute("aria-expanded", String(open));
+      if (open) menu.querySelector("button")?.focus();
+    });
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-expanded", "false");
+    wrapper.append(trigger);
+    const menu = document.createElement("div");
+    menu.className = "workspace-menu";
+    menu.setAttribute("role", "menu");
+    menu.hidden = true;
+    const items = [
+      ["Duplicate workspace", "Duplicate tab", () => createTab(state.tabs[state.active].route)],
+      ["Close other workspaces", "Close other tabs", closeOthers],
+      ["Close unpinned workspaces", "Close unpinned tabs", closeUnpinned],
+      ["Reopen closed workspace", "Reopen closed tab", reopen],
+    ];
+    items.forEach(([label, name, action]) => {
+      const item = makeButton(label, name, () => {
+        menu.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        action();
+      });
+      item.setAttribute("role", "menuitem");
+      item.tabIndex = -1;
+      item.addEventListener("keydown", event => {
+        if (event.key === "Escape") { menu.hidden = true; trigger.focus(); }
+        if (event.key === "ArrowDown") (item.nextElementSibling || menu.firstElementChild)?.focus();
+        if (event.key === "ArrowUp") (item.previousElementSibling || menu.lastElementChild)?.focus();
+      });
+      menu.append(item);
+    });
+    wrapper.append(menu);
+    return wrapper;
   }
 
   function makeTab(tab, index, list) {
@@ -137,9 +176,39 @@
       list.querySelectorAll('[role="tab"]')[next]?.focus();
     });
     wrapper.append(select);
-    wrapper.append(makeButton("Rename tab", "Rename", () => renameTab(index)));
-    wrapper.append(makeButton(tab.pinned ? "Unpin tab" : "Pin tab", tab.pinned ? "Unpin" : "Pin", () => togglePin(index)));
-    wrapper.append(makeButton("Close tab", "Close", () => closeTab(index)));
+    // Per-tab actions collapsed into one "…" menu per tab: the strip shows
+    // the tab title and a single affordance, not three labeled buttons.
+    const more = makeButton(`More actions for tab ${index + 1}`, "…", () => {
+      const menu = wrapper.querySelector(".workspace-menu");
+      const open = menu.hidden;
+      menu.hidden = !open;
+      more.setAttribute("aria-expanded", String(open));
+      if (open) menu.querySelector("button")?.focus();
+    });
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", "false");
+    wrapper.append(more);
+    const menu = document.createElement("div");
+    menu.className = "workspace-menu";
+    menu.setAttribute("role", "menu");
+    menu.hidden = true;
+    [["Rename tab", () => renameTab(index)], [tab.pinned ? "Unpin tab" : "Pin tab", () => togglePin(index)], ["Close tab", () => closeTab(index)]]
+      .forEach(([name, action]) => {
+        const item = makeButton(name, name, () => {
+          menu.hidden = true;
+          more.setAttribute("aria-expanded", "false");
+          action();
+        });
+        item.setAttribute("role", "menuitem");
+        item.tabIndex = -1;
+        item.addEventListener("keydown", event => {
+          if (event.key === "Escape") { menu.hidden = true; more.focus(); }
+          if (event.key === "ArrowDown") (item.nextElementSibling || menu.firstElementChild)?.focus();
+          if (event.key === "ArrowUp") (item.previousElementSibling || menu.lastElementChild)?.focus();
+        });
+        menu.append(item);
+      });
+    wrapper.append(menu);
     wrapper.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", String(index)));
     wrapper.addEventListener("dragover", event => event.preventDefault());
     wrapper.addEventListener("drop", event => {
@@ -423,7 +492,34 @@
     updateRoute();
   }
 
+  // Close every open workspace menu on outside pointerdown or Escape. One
+  // document-level listener instead of per-menu focusout handlers, which
+  // raced with strip re-renders (a focused element removed by render() can
+  // synthesize focusout with an unrelated relatedTarget).
+  function closeAllMenus() {
+    document.querySelectorAll(".workspace-menu:not([hidden])").forEach(menu => {
+      menu.hidden = true;
+      const trigger = menu.parentElement?.querySelector("button[aria-haspopup=menu]");
+      trigger?.setAttribute("aria-expanded", "false");
+    });
+  }
+
+  function handleDocumentPointerDown(event) {
+    if (event.target.closest?.(".workspace-overflow, .workspace-tab .workspace-menu")) return;
+    closeAllMenus();
+  }
+
+  function handleMenuKeydown(event) {
+    if (event.key !== "Escape") return;
+    if (!document.querySelector(".workspace-menu:not([hidden])")) return;
+    event.stopPropagation();
+    closeAllMenus();
+    document.querySelector(".workspace-strip")?.querySelector("button[aria-haspopup=menu]")?.focus();
+  }
+
   function init() {
+    document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+    document.addEventListener("keydown", handleMenuKeydown, true);
     render();
     setupSidebar();
     document.addEventListener("auxclick", handleAuxClick, true);

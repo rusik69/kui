@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { test, expect, openTableFilters } from "./fixtures/application.mjs";
+import { test, expect, openTableFilters, openDetailsPanel } from "./fixtures/application.mjs";
 
 async function openResource(page, resource) {
   await page.locator(`.sidebar-link[data-resource="${resource}"]`).click();
@@ -254,12 +254,14 @@ test("log tail presets, filtering, copying, and downloads preserve consumer-visi
   });
 
   if (canReadClipboard) {
-    await page.getByRole("button", { name: "Copy filtered" }).click();
+    await openDetailsPanel(page, ".log-tools-panel");
+  await page.getByRole("button", { name: "Copy filtered" }).click();
     await expect(page.locator("#toast-container")).toContainText("Copied to clipboard");
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("second deterministic log line");
   }
 
   const rawPromise = page.waitForEvent("download");
+  await openDetailsPanel(page, ".log-tools-panel");
   await page.getByRole("button", { name: "Download raw" }).click();
   const raw = await rawPromise;
   expect(raw.suggestedFilename()).toBe("alpha-sidecar-raw.log");
@@ -268,6 +270,7 @@ test("log tail presets, filtering, copying, and downloads preserve consumer-visi
   expect(rawContent).toContain("second deterministic log line");
 
   const filteredPromise = page.waitForEvent("download");
+  await openDetailsPanel(page, ".log-tools-panel");
   await page.getByRole("button", { name: "Download filtered" }).click();
   const filtered = await filteredPromise;
   expect(filtered.suggestedFilename()).toBe("alpha-sidecar-filtered.log");

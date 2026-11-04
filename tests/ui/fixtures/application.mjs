@@ -124,3 +124,13 @@ export async function openTableFilters(page) {
   if (!(await filters.evaluate(element => element.open))) await filters.locator(":scope > summary").click();
   return filters;
 }
+
+// openDetailsPanel opens a <details> disclosure (YAML editing tools, log
+// secondary actions) if it is not already open, so tests that click controls
+// inside it keep working after the toolbar decluttering.
+export async function openDetailsPanel(page, selector) {
+  const panel = page.locator(selector);
+  if (!(await panel.count())) return null;
+  if (!(await panel.evaluate(element => element.open))) await panel.locator(":scope > summary").click();
+  return panel;
+}

@@ -191,6 +191,56 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 .create-actions-spacer { display: none; }
 .table-create-button { white-space: nowrap; }
 .table-create-button .icon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+/* Workspace overflow menus (strip-level and per-tab): small popover under a
+   "…" trigger. */
+.workspace-overflow { position: relative; }
+.workspace-tab { position: relative; }
+.workspace-menu {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	z-index: 30;
+	display: grid;
+	min-width: 11rem;
+	padding: 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	box-shadow: 0 10px 30px rgb(0 0 0 / 35%);
+}
+.workspace-menu[hidden] { display: none; }
+.workspace-menu button {
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	padding: 6px 10px;
+	border-radius: calc(var(--radius) - 2px);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.workspace-menu button:hover, .workspace-menu button:focus-visible { background: var(--bg-hover); outline: none; }
+.workspace-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Collapsed secondary tool panels (YAML editing tools, log actions). */
+.yaml-tools-panel, .log-tools-panel { display: inline-block; }
+.yaml-tools-panel > summary, .log-tools-panel > summary {
+	display: inline-flex;
+	align-items: center;
+	min-height: 32px;
+	padding: 4px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	color: var(--text);
+	cursor: pointer;
+	user-select: none;
+	list-style: none;
+}
+.yaml-tools-panel > summary::-webkit-details-marker, .log-tools-panel > summary::-webkit-details-marker { display: none; }
+.yaml-tools-panel > summary::before, .log-tools-panel > summary::before { content: "▸ "; color: var(--text-dim); }
+.yaml-tools-panel[open] > summary::before, .log-tools-panel[open] > summary::before { content: "▾ "; }
+.log-secondary-tools { border: 0; background: transparent; padding: 8px 0 0; }
 @media (forced-colors: active) {
 	.create-dialog, .create-dialog input, .create-dialog select, .create-editor-wrap { border: 1px solid ButtonText; }
 	.create-dialog { color: CanvasText; background: Canvas; }

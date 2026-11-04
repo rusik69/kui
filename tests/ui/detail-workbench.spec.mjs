@@ -1,4 +1,4 @@
-import { test, expect, openTableFilters } from "./fixtures/application.mjs";
+import { test, expect, openTableFilters, openDetailsPanel } from "./fixtures/application.mjs";
 
 test.beforeEach(async ({ app, page }) => {
   await page.goto(app.url);
@@ -23,7 +23,9 @@ test("detail metadata identity, disclosure state, and escaped label selectors ar
   await openDetail(page, "pods", "alpha");
   await expect(page.getByRole("button", { name: "Hide all secret values" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Resource identity" })).toContainText("uid-dev-alpha");
-  await expect(page.getByRole("link", { name: "Open canonical resource detail in new tab" })).toHaveAttribute("target", "_blank");
+  // The dedicated "open in new tab" link was removed in the toolbar decluttering;
+  // the canonical URL is still exposed on the detail data for direct navigation.
+  await expect(page.locator(".detail-header")).toContainText("alpha");
   const metadata = page.locator('.pill-row[data-metadata-kind="labels"] button[data-key="app"]');
   await expect(metadata).toHaveAttribute("data-value", "alpha");
   await metadata.click();
@@ -41,7 +43,9 @@ test("detail metadata identity, disclosure state, and escaped label selectors ar
   const section = page.getByRole("button", { name: /Metadata/ });
   await section.click();
   await expect(section).toHaveAttribute("aria-expanded", "false");
-  await page.getByRole("button", { name: "Expand all sections" }).click();
+  const sectionsToggle = page.locator("#sections-toggle");
+  await sectionsToggle.click();
+  await expect(sectionsToggle).toHaveAttribute("data-expanded", "true");
   await expect(section).toHaveAttribute("aria-expanded", "true");
 });
 
@@ -59,6 +63,7 @@ test("YAML drafts are scoped and bounded; validation reports server parsing fail
   await page.locator("#tab-button-yaml").click();
   await expect(page.locator("#yaml-editor")).toHaveValue(/local workbench draft/);
   await page.locator("#yaml-editor").fill("kind: [unterminated\nmetadata:");
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.getByRole("button", { name: "Validate YAML" }).click();
   await expect(page.locator("#yaml-result")).toContainText(/validation failed/i);
   await page.locator("#yaml-editor").fill("x".repeat(262145));
@@ -74,13 +79,17 @@ test("YAML workbench find/replace, gutter, wrap, indent, and revisions keep edit
   const editor = page.locator("#yaml-editor");
   const original = await editor.inputValue();
   await editor.fill(`${original}\n# marker one\n`);
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.locator("#yaml-find").fill("marker one");
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.getByRole("button", { name: "Find next" }).click();
   await expect(editor).toHaveJSProperty("selectionStart", original.length + 3);
   await page.locator("#yaml-replace").fill("marker two");
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.getByRole("button", { name: "Replace all" }).click();
   await expect(page.locator("#yaml-dirty-status")).toContainText("Replaced 1 matches");
   const beforeWrap = await editor.inputValue();
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.locator("#yaml-wrap").check();
   await expect(editor).toHaveClass(/yaml-wrap/);
   await expect(editor).toHaveValue(beforeWrap);
@@ -88,11 +97,13 @@ test("YAML workbench find/replace, gutter, wrap, indent, and revisions keep edit
   const lineCount = await editor.evaluate((element) => element.value.split("\n").length);
   await expect(page.locator("#yaml-line-numbers")).toContainText(String(lineCount));
   await editor.evaluate((element) => element.setSelectionRange(0, element.value.indexOf("\n")));
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.getByRole("button", { name: "Indent selection" }).click();
   await expect(editor).toHaveValue(/^  apiVersion:/);
   const revisions = page.locator("#yaml-revisions");
   await expect(revisions.locator("option")).toHaveCount(3);
   await revisions.selectOption("0");
+  await openDetailsPanel(page, ".yaml-tools-panel");
   await page.getByRole("button", { name: "Restore revision" }).click();
   await expect(editor).toHaveValue(/marker two/);
 });
@@ -105,6 +116,7 @@ test("logs bookmark notes and highlight presets stay scoped without storing log 
   await expect(page.locator("#logs-pane")).toContainText("alpha started");
   await expect(page.locator("#log-line-counts")).toContainText(/total · .* matching · .* bookmarked/);
   await page.locator("#log-bookmark-note").fill("check startup");
+  await openDetailsPanel(page, ".log-tools-panel");
   await page.getByRole("button", { name: "Bookmark current line" }).click();
   await expect(page.locator("#log-bookmarks")).toContainText("check startup");
   await page.locator(".log-highlights summary").click();
@@ -130,6 +142,7 @@ test("log bookmarks stay anchored to the original line as the stream grows and f
   await page.getByRole("button", { name: "Connect logs" }).click();
   await expect(page.locator("#logs-pane")).toContainText("second stable line");
   await page.locator("#log-bookmark-note").fill("stable anchor");
+  await openDetailsPanel(page, ".log-tools-panel");
   await page.getByRole("button", { name: "Bookmark current line" }).click();
   await expect(page.locator("#log-bookmarks")).toContainText("Line 2");
   await page.evaluate(() => document.querySelector("#logs-pane").scrollTop = 0);

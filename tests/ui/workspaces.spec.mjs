@@ -24,18 +24,32 @@ test("workspace tabs isolate routes and restore bounded session state", async ({
 test("workspace controls rename, pin, duplicate, reorder and reopen tabs", async ({ page }) => {
   const strip = page.getByRole("navigation", { name: "Workspaces" });
   await strip.getByRole("button", { name: "New workspace tab" }).click();
+  // Per-tab actions live in the tab's "…" menu.
+  const tabMenu = strip.locator(".workspace-tab").last();
+  await tabMenu.getByRole("button", { name: /More actions for tab/ }).click();
   page.once("dialog", dialog => dialog.accept("My workspace"));
-  await strip.getByRole("button", { name: "Rename tab" }).last().click();
+  await tabMenu.getByRole("menuitem", { name: "Rename tab" }).click();
   await expect(strip.getByRole("tab", { name: /My workspace/ })).toBeVisible();
-  await strip.getByRole("button", { name: "Pin tab" }).last().click();
-  await strip.getByRole("button", { name: "Duplicate workspace" }).click();
+  await tabMenu.getByRole("button", { name: /More actions for tab/ }).click();
+  await tabMenu.getByRole("menuitem", { name: "Pin tab" }).click();
+  // Strip-level actions live in the "…" overflow menu.
+  // Pin re-rendered the strip; wait for the fresh overflow trigger, open the
+  // menu once, and wait for the item before clicking.
+  const overflow = strip.getByRole("button", { name: "More workspace actions" });
+  await expect(overflow).toBeVisible();
+  await overflow.click();
+  const duplicate = strip.getByRole("menuitem", { name: "Duplicate workspace" });
+  await expect(duplicate).toBeAttached();
+  await duplicate.click();
   await expect(strip.getByRole("tab")).toHaveCount(3);
   const second = strip.locator(".workspace-tab").nth(1).getByRole("tab");
   await second.focus();
   await second.press("Alt+ArrowRight");
   await expect(page.locator("#workspace-announcement")).toContainText("moved to position");
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
-  await strip.getByRole("button", { name: "Reopen closed workspace" }).click();
+  await strip.locator(".workspace-tab").last().getByRole("button", { name: /More actions for tab/ }).click();
+  await strip.locator(".workspace-tab").last().getByRole("menuitem", { name: "Close tab" }).click();
+  await overflow.click();
+  await strip.getByRole("menuitem", { name: "Reopen closed workspace" }).click();
   await expect(strip.getByRole("tab")).toHaveCount(3);
 });
 
@@ -99,6 +113,11 @@ test("malformed routes do not shift the restored active workspace index", async 
 
 test("save completes a deferred draft close; discard closes and cancel preserves it", async ({ page }) => {
   const strip = page.getByRole("navigation", { name: "Workspaces" });
+  const closeViaMenu = async () => {
+    const shell = strip.locator(".workspace-tab").last();
+    await shell.getByRole("button", { name: /More actions for tab/ }).click();
+    await shell.getByRole("menuitem", { name: "Close tab" }).click();
+  };
   await strip.getByRole("button", { name: "New workspace tab" }).click();
   await page.evaluate(() => {
     const form = document.createElement("form");
@@ -111,10 +130,10 @@ test("save completes a deferred draft close; discard closes and cancel preserves
     document.body.append(form);
   });
   page.once("dialog", dialog => dialog.accept("cancel"));
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
+  await closeViaMenu();
   await expect(strip.getByRole("tab")).toHaveCount(2);
   page.once("dialog", dialog => dialog.accept("save"));
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
+  await closeViaMenu();
   await expect(strip.getByRole("tab")).toHaveCount(1);
 });
 test("failed YAML review clears deferred close and leaves workspace open", async ({ page }) => {
@@ -133,7 +152,9 @@ test("failed YAML review clears deferred close and leaves workspace open", async
     });
   });
   page.once("dialog", dialog => dialog.accept("save"));
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
+  const tabShell = strip.locator(".workspace-tab").last();
+  await tabShell.getByRole("button", { name: /More actions for tab/ }).click();
+  await tabShell.getByRole("menuitem", { name: "Close tab" }).click();
   await expect(page.locator("#workspace-save-status")).toContainText("failed");
   await page.evaluate(() => {
     const editor = document.querySelector("#yaml-editor");
@@ -151,10 +172,15 @@ test("closing a tab with unsaved YAML requires discard, save, or cancel", async 
   });
   const strip = page.getByRole("navigation", { name: "Workspaces" });
   await strip.getByRole("button", { name: "New workspace tab" }).click();
+  const closeViaMenu = async () => {
+    const shell = strip.locator(".workspace-tab").last();
+    await shell.getByRole("button", { name: /More actions for tab/ }).click();
+    await shell.getByRole("menuitem", { name: "Close tab" }).click();
+  };
   page.once("dialog", dialog => dialog.accept("cancel"));
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
+  await closeViaMenu();
   await expect(strip.getByRole("tab")).toHaveCount(2);
   page.once("dialog", dialog => dialog.accept("discard"));
-  await strip.getByRole("button", { name: "Close tab" }).last().click();
+  await closeViaMenu();
   await expect(strip.getByRole("tab")).toHaveCount(1);
 });

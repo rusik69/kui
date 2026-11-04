@@ -86,9 +86,13 @@ test("table filters default to an accessible disclosure and fit mobile width", a
   const filters = page.locator(".table-filter-panel");
   await expect(filters).not.toHaveAttribute("open");
   await expect(filters.locator(":scope > summary")).toHaveText("Filters and table controls");
+  // The standalone Clear-filter button was removed from the topbar; Escape in
+  // the search input clears it instead.
   const searchBox = await page.locator(".topbar #row-filter").boundingBox();
-  const clearButton = await page.locator('.topbar button[aria-label="Clear resource filter"]').boundingBox();
-  expect(Math.abs(searchBox.y - clearButton.y)).toBeLessThan(2);
+  expect(await page.locator('.topbar button[aria-label="Clear resource filter"]').count()).toBe(0);
+  await searchBox && page.locator(".topbar #row-filter").fill("alpha");
+  await page.locator(".topbar #row-filter").press("Escape");
+  await expect(page.locator(".topbar #row-filter")).toHaveValue("");
   await filters.locator(":scope > summary").click();
   await expect(filters).toHaveAttribute("open");
   await expect(page.locator("#label-selector")).toBeVisible();

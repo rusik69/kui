@@ -37,6 +37,7 @@ var templateBufferPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 type Server struct {
 	mgr               *k8s.Manager
 	forwards          *k8s.ForwardManager
+	terminals         *terminalManager
 	tmpl              *template.Template
 	mux               *http.ServeMux
 	csrfToken         string
@@ -132,6 +133,7 @@ func New(mgr *k8s.Manager) (*Server, error) {
 	s := &Server{
 		mgr:           mgr,
 		forwards:      k8s.NewForwardManager(),
+		terminals:     newTerminalManager(),
 		tmpl:          tmpl,
 		mux:           http.NewServeMux(),
 		csrfToken:     csrfToken,
@@ -185,6 +187,9 @@ func (s *Server) InitRancher(flagConfigured bool) {
 func (s *Server) Close() {
 	if s.forwards != nil {
 		s.forwards.StopAll()
+	}
+	if s.terminals != nil {
+		s.terminals.closeAll()
 	}
 }
 
@@ -257,6 +262,9 @@ func isLongLivedRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
+	if strings.Contains(r.URL.Path, "/terminal/") {
+		return true // local kubectl terminal: WebSocket session, not an API call
+	}
 	path := r.URL.Path
 	return strings.HasSuffix(path, "/watch") || strings.HasSuffix(path, "/logs") || strings.HasSuffix(path, "/exec")
 }
@@ -322,6 +330,8 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/pods/{name}/logs", s.handleLogs)
 	s.mux.HandleFunc("GET /c/{ctx}/{ns}/pods/{name}/exec", s.handleExec)
+	s.mux.HandleFunc("GET /c/{ctx}/{ns}/terminal", s.handleTerminalPage)
+	s.mux.HandleFunc("GET /terminal/{ctx}", s.handleTerminal)
 	s.mux.HandleFunc("POST /c/{ctx}/{ns}/pods/{name}/portforward", s.protectMutation(s.handlePortForwardStart))
 	s.mux.HandleFunc("GET /portforward", s.handlePortForwardList)
 	s.mux.HandleFunc("DELETE /portforward/{id}", s.protectMutation(s.handlePortForwardStop))

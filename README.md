@@ -129,6 +129,11 @@ WebKit webview; it needs no separately installed webview runtime.
   Nodes/Namespaces/Events, plus any CRD via live API discovery ("All resources").
 - Live-updating tables (watch -> SSE), pod logs with filtering/pause/tail controls,
   interactive pod exec, and an ephemeral pod debug shell with an explicit stop control.
+- A **kubectl terminal** (sidebar → Terminal): an interactive shell whose
+  `KUBECONFIG` points at a snapshot kubeconfig for the context kui has
+  selected — every `kubectl` command runs against exactly that context,
+  including Rancher-imported ones. The shell is a child of kui on the local
+  machine; closing the tab ends it and the snapshot is deleted.
 - Open a node debug shell from a node's detail pane. It joins host network/PID/IPC
   namespaces and mounts the host root read-only at `/host`; it is not a privileged container.
 - Resize the detail pane by dragging its divider or focusing it and using the
@@ -206,6 +211,12 @@ an authenticated TLS proxy. Same-origin and CSRF checks protect browser
 mutations from cross-site requests; they are not authentication for remote
 clients. For remote use, prefer headless mode bound to loopback and an SSH
 tunnel.
+
+The kubectl terminal spawns a local shell as a child of kui with `KUBECONFIG`
+pointing at a per-session snapshot kubeconfig (0600, deleted when the
+terminal closes). It grants nothing beyond what the kui user already has —
+but for the same reason it must never be exposed beyond loopback: anyone who
+can reach the UI can run arbitrary kubectl commands as that user.
 
 `/healthz` reports that the HTTP process is serving. `/readyz` checks that the
 kubeconfig can be read and the selected context exists; neither endpoint

@@ -183,6 +183,7 @@
 <script src="/static/appearance.js"></script>
 <script src="/static/rancher.js"></script>
 <script src="/static/create.js"></script>
+<script src="/static/kubectl_terminal.js"></script>
 <script src="/static/accessibility.js"></script>
 </body>
 </html>
@@ -195,6 +196,22 @@
   &mdash; switch context above, or fix the credentials and reload.
 </div>
 {{end}}
+{{if eq .Resource "terminal"}}
+<div class="terminal-panel" data-terminal-ws="/terminal/{{.Context}}">
+  <div class="terminal-toolbar">
+    <strong>kubectl terminal</strong>
+    <span class="text-dim" id="terminal-context-label">{{.ContextName}}</span>
+    <button class="btn" id="terminal-reconnect" onclick="kuiKubectlTerminal.connect()" hidden>Reconnect</button>
+    <span class="stream-status" id="terminal-status" role="status" aria-live="polite">Disconnected</span>
+  </div>
+  <p class="text-dim terminal-hint">
+    Interactive shell with <code>KUBECONFIG</code> scoped to <strong>{{.ContextName}}</strong> —
+    every <code>kubectl</code> command here talks to this context only. The shell is a child of
+    kui on this machine; closing the tab ends it.
+  </p>
+  <div id="kubectl-term-pane" class="term-pane kubectl-term"></div>
+</div>
+{{else}}
 <div class="bulk-bar" id="bulk-bar" style="display:none" role="status" aria-live="polite">
   <span id="bulk-count"></span>
   <button class="btn" onclick="kui.copySelectedNames()">Copy names</button>
@@ -214,4 +231,5 @@
   <div class="detail-splitter" id="detail-splitter" style="display:none" role="separator" aria-label="Resize detail pane" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="900" aria-valuenow="420" tabindex="0"></div>
   <div class="detail-pane" id="detail-pane"></div>
 </div>
+{{end}}
 {{end}}

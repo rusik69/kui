@@ -11,7 +11,7 @@
   <div class="sidebar-group" data-sidebar-group="cluster">
     <div class="sidebar-section"><span>Cluster</span><button type="button" aria-label="Collapse Cluster group" aria-expanded="true">−</button></div>
     <a class="sidebar-link {{if eq .Resource "overview"}}active{{end}}" data-resource="overview" data-label="Overview" href="/c/{{.Context}}/{{.Namespace}}/overview" {{if eq .Resource "overview"}}aria-current="page"{{end}} hx-get="/c/{{.Context}}/{{.Namespace}}/overview" hx-target="#content" hx-swap="innerHTML" hx-push-url="/c/{{.Context}}/{{.Namespace}}/overview" onclick="kui.selectSidebarLink(this)"><svg class="icon"><use href="#icon-overview"/></svg>Overview</a>
-    <button type="button" class="sidebar-link" data-resource="terminal" data-label="Terminal &amp; SSH" onclick="kui.openDebugShell()"><svg class="icon"><use href="#icon-terminal"/></svg>Terminal &amp; SSH</button>
+    <button type="button" class="sidebar-link {{if eq .Resource "terminal"}}active{{end}}" data-resource="terminal" data-label="Terminal" hx-get="/c/{{.Context}}/{{.Namespace}}/terminal" hx-target="#content" hx-swap="innerHTML" onclick="kui.selectSidebarLink(this)"><svg class="icon"><use href="#icon-terminal"/></svg>Terminal</button>
   </div>
   {{range $group := .Groups}}
   <div class="sidebar-group" data-sidebar-group="{{$group}}">

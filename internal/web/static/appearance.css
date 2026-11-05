@@ -192,6 +192,13 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 .create-namespace-label { display: flex !important; align-items: center; gap: 8px; margin-right: auto; font-weight: 600; }
 .create-namespace-label select { min-height: 34px; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font: inherit; }
 .create-actions-spacer { display: none; }
+/* kubectl terminal panel (sidebar Terminal link): full-height xterm scoped
+   to the selected context. */
+.terminal-panel { display: flex; flex-direction: column; min-height: 0; height: calc(100vh - 210px); }
+.terminal-toolbar { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.terminal-hint { margin: 0 0 8px; }
+.terminal-hint code { background: var(--bg-raised); padding: 1px 5px; border-radius: 4px; }
+.kubectl-term { flex: 1; min-height: 320px; }
 .table-create-button { white-space: nowrap; }
 .table-create-button .icon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 /* Workspace overflow menus (strip-level and per-tab): small popover under a

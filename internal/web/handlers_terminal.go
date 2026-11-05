@@ -117,7 +117,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := term.Read(buf)
 			if n > 0 {
-				conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+				if werr := conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); werr != nil {
+					return
+				}
 				if werr := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
 					return
 				}
@@ -135,7 +137,9 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		conn.SetWriteDeadline(time.Now().Add(terminalWriteDeadline))
+		if werr := conn.SetWriteDeadline(time.Now().Add(terminalWriteDeadline)); werr != nil {
+			return
+		}
 		if _, err := term.Write(message); err != nil {
 			return
 		}

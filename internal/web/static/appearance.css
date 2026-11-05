@@ -157,6 +157,9 @@ body { font-size: calc(13px * var(--appearance-font-scale, 1)); }
 .rancher-status[data-state="failure"] { color: var(--error); }
 .rancher-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .rancher-actions .rancher-remove { margin-right: auto; color: var(--error); }
+.rancher-server-list { display: grid; gap: 6px; margin-top: 8px; }
+.rancher-server-row { display: flex; align-items: center; gap: 8px; }
+.rancher-server-info { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: .92em; }
 @media (forced-colors: active) {
 	.rancher-dialog, .rancher-dialog button, .rancher-dialog input { border: 1px solid ButtonText; }
 	.rancher-dialog { color: CanvasText; background: Canvas; }

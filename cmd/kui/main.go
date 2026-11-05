@@ -36,8 +36,8 @@ func run() int {
 	defaultContext := flags.String("context", "", "default kubeconfig context (defaults to current-context)")
 	defaultNamespace := flags.String("namespace", "", "default namespace (defaults to the selected context's namespace or all namespaces)")
 	accessLog := flags.Bool("access-log", false, "log HTTP requests (method, path, status, duration)")
-	rancherURL := flags.String("rancher-url", os.Getenv(settings.EnvURL), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts")
-	rancherTokenFlag := flags.String("rancher-token", "", "Rancher API bearer token (or set KUI_RANCHER_TOKEN; env var preferred to keep the token out of the process list)")
+	rancherURL := flags.String("rancher-url", os.Getenv(settings.EnvURL), "Rancher management server URL (e.g. https://rancher.example.com); its clusters appear as \"rancher/<name>\" contexts. Repeatable or comma-separated for several servers")
+	rancherTokenFlag := flags.String("rancher-token", "", "Rancher API bearer token (or set KUI_RANCHER_TOKEN; env var preferred to keep the token out of the process list). With several servers, pass comma-separated tokens matching the URLs, or the same token if shared")
 	rancherInsecure := flags.Bool("rancher-insecure", false, "skip TLS verification for the Rancher server (self-signed certificates)")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -48,17 +48,13 @@ func run() int {
 
 	mgr := k8s.NewManager(*kubeconfig)
 	rancherToken := settings.TokenFromFlagOrEnv(*rancherTokenFlag)
-	flagConfiguredRancher := strings.TrimSpace(*rancherURL) != ""
+	flagSources, flagToken := flagRancherSources(*rancherURL, rancherToken, *rancherInsecure)
+	flagConfiguredRancher := len(flagSources) > 0
 	if flagConfiguredRancher {
-		source, err := k8s.NewRancherSource(*rancherURL, rancherToken, *rancherInsecure)
-		if err != nil {
-			log.Printf("configure Rancher: %v", err)
-			return 1
-		}
-		if strings.TrimSpace(rancherToken) == "" {
+		mgr.SetRancherSources(flagSources)
+		if flagToken == "" {
 			log.Printf("rancher-url set without a token; set --rancher-token or KUI_RANCHER_TOKEN, or configure it in the UI")
 		}
-		mgr.SetRancher(source)
 	}
 	contextName, err := selectContext(mgr, *defaultContext)
 	if err != nil {
@@ -76,7 +72,7 @@ func run() int {
 	defer srv.Close()
 	srv.SetDebugImage(*debugImage)
 	srv.SetDefaults(contextName, *defaultNamespace)
-	srv.SetRancherToken(rancherToken)
+	srv.SetRancherToken(flagToken)
 	if strings.TrimSpace(*kubeconfig) != "" {
 		srv.SetFlagKubeconfig()
 	}
@@ -244,4 +240,43 @@ func selectContext(mgr *k8s.Manager, override string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("kubeconfig context %q does not exist", selected)
+}
+
+// flagRancherSources turns --rancher-url/--rancher-token values into one
+// source per server. URLs may be comma-separated or repeated via
+// KUI_RANCHER_URL; tokens follow the same order, or a single token applies
+// to every server (shared-token setups). A source that fails URL validation
+// is skipped with a log line — one bad entry must not drop the others.
+func flagRancherSources(rawURLs, token string, insecure bool) ([]*k8s.RancherSource, string) {
+	var urls []string
+	for _, part := range strings.Split(rawURLs, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+	if len(urls) == 0 {
+		return nil, ""
+	}
+	tokens := strings.Split(token, ",")
+	sources := make([]*k8s.RancherSource, 0, len(urls))
+	lastToken := ""
+	for i, rawURL := range urls {
+		serverToken := ""
+		if i < len(tokens) {
+			serverToken = strings.TrimSpace(tokens[i])
+		} else if len(tokens) == 1 {
+			// One token for many servers: the shared-token setup.
+			serverToken = strings.TrimSpace(tokens[0])
+		}
+		source, err := k8s.NewRancherSource(rawURL, serverToken, insecure)
+		if err != nil {
+			log.Printf("configure Rancher %q: %v", rawURL, err)
+			continue
+		}
+		sources = append(sources, source)
+		if serverToken != "" {
+			lastToken = serverToken
+		}
+	}
+	return sources, lastToken
 }

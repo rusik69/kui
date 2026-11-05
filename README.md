@@ -39,9 +39,20 @@ Rancher can be set up two ways — from the UI or from flags. In the UI, open
 the gear button in the top bar, enter the server URL and API key, and save;
 kui verifies the connection before switching over. On the command line, pass
 `--rancher-url` (plus an API token). Either way kui imports one context per
-Rancher cluster you can access, named `rancher/<cluster name>`. They appear in
-the top-bar context switcher and the search palette like any other context;
-picking one browses the cluster through Rancher's generated kubeconfig.
+Rancher cluster you can access. They appear in the top-bar context switcher
+and the search palette like any other context; picking one browses the
+cluster through Rancher's generated kubeconfig.
+
+**Multiple Rancher servers** are supported: save each server in the settings
+dialog (connect is per server — a new URL adds a connection, re-saving an
+existing URL updates it), and each server's clusters appear side by side in
+the same switcher. With two or more servers connected, context names carry
+the server so identical cluster names never collide:
+`rancher/<server>/<cluster name>` (with one server the plain
+`rancher/<cluster name>` shape is kept). The dialog lists every connected
+server with its own Disconnect control; `--rancher-url` also accepts
+comma-separated URLs (with matching comma-separated `--rancher-token`
+values, or one shared token).
 
 The same settings dialog also takes a **kubeconfig directory**: point it at a
 folder of kubeconfig files and every context from every file is merged into
@@ -51,6 +62,9 @@ the `--kubeconfig <dir>` flag, but set at runtime and persisted. A
 
 ```sh
 KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.example.com
+# two servers:
+KUI_RANCHER_TOKEN=token-a,token-b go run ./cmd/kui \
+  --rancher-url https://rancher.example.com,https://rancher2.example.com
 ```
 
 - Needs a Rancher API token with at least view access to the clusters
@@ -58,19 +72,19 @@ KUI_RANCHER_TOKEN=token-xxxx go run ./cmd/kui --rancher-url https://rancher.exam
 - Contexts refresh from Rancher every 5 minutes; a generated kubeconfig is
   reused for 1 hour. Tokens Rancher embeds expire per the server's
   `kubeconfig-default-token-ttl-minutes` setting (default 30 days).
-- Settings saved in the UI — the Rancher connection **and** the kubeconfig
+- Settings saved in the UI — the Rancher connections **and** the kubeconfig
   directory — persist to `settings.json` in the user config directory
   (`~/Library/Application Support/kui`, `~/.config/kui`, `%AppData%\kui`;
   override with `KUI_CONFIG_DIR`), written with owner-only permissions, and are
   restored on the next start. CLI flags and environment variables win over the
   file for the current process but are not persisted. Disconnecting from the UI
-  clears the saved Rancher entry; clearing the directory field restores the
-  default kubeconfig.
+  clears the saved entry for that server (or all of them with the disconnect
+  button); clearing the directory field restores the default kubeconfig.
+- One unreachable server never hides the others: its clusters keep serving
+  from the last known set while the rest stay live.
 - The settings file and the kubeconfig are never modified by imports beyond
-  that; the token is never returned by the API — responses only say whether
-  one is saved.
-- If Rancher is unreachable, the last known cluster set keeps working until
-  the server responds again.
+  that; tokens are never returned by the API — responses only say whether
+  one is saved per server.
 - With no kubeconfig and no Rancher configured, kui still serves the shell
   so the connection can be set up from the browser.
 

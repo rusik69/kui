@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
@@ -24,14 +25,14 @@ type ContextInfo struct {
 }
 
 // Manager loads kubeconfig and hands out cached per-context clients. An
-// optional Rancher source adds imported cluster contexts on top of the
-// kubeconfig file without modifying it. The source can be attached, replaced,
-// or removed at runtime (see SetRancher).
+// optional set of Rancher sources adds imported cluster contexts on top of
+// the kubeconfig file without modifying it. Sources can be attached,
+// replaced, or removed at runtime (see SetRancherSources).
 type Manager struct {
 	loadingRules      *clientcmd.ClientConfigLoadingRules
 	kubeconfigPath    string // as given: a file, a directory, or ""
 	sourceMu          sync.RWMutex
-	rancher           *RancherSource
+	ranchers          []*RancherSource
 	mu                sync.RWMutex
 	clients           map[string]*Clients
 	configFingerprint string
@@ -119,22 +120,48 @@ func kubeconfigPaths(dir string) []string {
 	return out
 }
 
-// SetRancher attaches a Rancher source whose clusters appear as extra
-// contexts. Passing nil removes the current source. Safe to call while the
-// server is running; clients built for no-longer-imported clusters are
-// dropped on the next fingerprint check.
+// SetRancher attaches a single Rancher source, replacing every previously
+// attached one (nil removes all). Kept for the single-server flag path and
+// existing callers; multi-server code uses SetRancherSources.
 func (m *Manager) SetRancher(source *RancherSource) {
+	var sources []*RancherSource
+	if source != nil {
+		sources = []*RancherSource{source}
+	}
+	m.SetRancherSources(sources)
+}
+
+// SetRancherSources attaches several Rancher sources at once, replacing
+// every previously attached one. Passing nil or an empty list removes all.
+// Safe to call while the server is running; clients built for
+// no-longer-imported clusters are dropped on the next fingerprint check.
+// Context names are namespaced per server: with zero or one attached source
+// clusters keep the plain "rancher/<name>" shape, with two or more the names
+// gain the server ID ("rancher/<server>/<name>") so the same cluster name on
+// two servers never collides.
+func (m *Manager) SetRancherSources(sources []*RancherSource) {
 	m.sourceMu.Lock()
-	m.rancher = source
+	m.ranchers = sources
 	m.sourceMu.Unlock()
 	m.refreshIfKubeconfigChanged()
 }
 
-// Rancher returns the currently attached Rancher source, or nil.
+// Ranchers returns the currently attached Rancher sources.
+func (m *Manager) Ranchers() []*RancherSource {
+	m.sourceMu.RLock()
+	defer m.sourceMu.RUnlock()
+	return m.ranchers
+}
+
+// Rancher returns the single attached source when exactly one is connected,
+// or nil (zero or several sources) — the single-server compatibility view.
 func (m *Manager) Rancher() *RancherSource {
 	m.sourceMu.RLock()
 	defer m.sourceMu.RUnlock()
-	return m.rancher
+	if len(m.ranchers) == 1 {
+		return m.ranchers[0]
+	}
+	return nil
 }
 
 // refreshIfKubeconfigChanged drops clients built from stale cluster, user,
@@ -174,11 +201,15 @@ func (m *Manager) refreshIfKubeconfigChanged() {
 			_, _ = hash.Write([]byte{0})
 		}
 	}
-	if m.Rancher() != nil {
+	if ranchers := m.Ranchers(); len(ranchers) > 0 {
 		_, _ = hash.Write([]byte("rancher"))
 		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(m.Rancher().Fingerprint()))
-		_, _ = hash.Write([]byte{0})
+		for _, source := range ranchers {
+			_, _ = hash.Write([]byte(source.ID()))
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write([]byte(source.Fingerprint()))
+			_, _ = hash.Write([]byte{0})
+		}
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
 	m.mu.Lock()
@@ -190,18 +221,20 @@ func (m *Manager) refreshIfKubeconfigChanged() {
 }
 
 // ListContexts returns every context defined in the kubeconfig plus every
-// cluster imported from Rancher, sorted by name.
+// cluster imported from every connected Rancher server, sorted by name.
 func (m *Manager) ListContexts() ([]ContextInfo, error) {
 	m.refreshIfKubeconfigChanged()
 	raw, err := m.loadFileConfig()
+	ranchers := m.Ranchers()
 	if err != nil {
-		if m.Rancher() == nil {
+		if len(ranchers) == 0 {
 			return nil, err
 		}
 		// The kubeconfig file is unreadable; Rancher clusters may still be
 		// usable on their own.
-		if rancherContexts, rerr := m.Rancher().Contexts(context.Background()); rerr == nil {
-			return rancherContexts, nil
+		out, rerr := m.rancherContexts(context.Background(), ranchers)
+		if rerr == nil && len(out) > 0 {
+			return out, nil
 		}
 		return nil, err
 	}
@@ -214,9 +247,38 @@ func (m *Manager) ListContexts() ([]ContextInfo, error) {
 			Current:   name == raw.CurrentContext,
 		})
 	}
-	if m.Rancher() != nil {
-		if rancherContexts, rerr := m.Rancher().Contexts(context.Background()); rerr == nil {
+	if len(ranchers) > 0 {
+		if rancherContexts, rerr := m.rancherContexts(context.Background(), ranchers); rerr == nil {
 			out = append(out, rancherContexts...)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// rancherContexts merges every source's imported clusters into one sorted
+// view, namespacing context names per server once more than one server is
+// connected (see SetRancherSources).
+func (m *Manager) rancherContexts(ctx context.Context, sources []*RancherSource) ([]ContextInfo, error) {
+	multi := len(sources) > 1
+	out := make([]ContextInfo, 0, len(sources)*4)
+	used := map[string]bool{}
+	for _, source := range sources {
+		contexts, err := source.Contexts(ctx)
+		if err != nil {
+			continue // one unreachable server must not hide the others
+		}
+		for _, info := range contexts {
+			name := info.Name
+			if multi {
+				name = RancherContextPrefix + source.ID() + "/" + strings.TrimPrefix(name, RancherContextPrefix)
+			}
+			if used[name] {
+				continue // defensive: identical names across sources are dropped
+			}
+			used[name] = true
+			info.Name = name
+			out = append(out, info)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -229,8 +291,38 @@ func (m *Manager) loadFileConfig() (*clientcmdapi.Config, error) {
 }
 
 // hasRancherContext reports whether ctxName names a Rancher-imported context.
+// With multiple servers the name carries the server ID
+// ("rancher/<server>/<cluster>"); every "rancher/"-prefixed name is handled
+// by rancherContextFor.
 func (m *Manager) hasRancherContext(ctxName string) bool {
-	return m.Rancher() != nil && strings.HasPrefix(ctxName, RancherContextPrefix)
+	return strings.HasPrefix(ctxName, RancherContextPrefix) && len(m.Ranchers()) > 0
+}
+
+// rancherContextFor resolves a Rancher-imported context name against the
+// attached sources. Names are tried per source in attached order: with one
+// server the plain "rancher/<cluster>" shape matches directly; with several
+// servers the name embeds the server ID ("rancher/<server>/<cluster>") and
+// only the matching source can own it.
+func (m *Manager) rancherContextFor(ctx context.Context, ctxName string) (*rest.Config, error) {
+	sources := m.Ranchers()
+	for _, source := range sources {
+		if !source.OwnsContext(ctxName) {
+			continue
+		}
+		if cfg, err := source.RestConfig(ctx, ctxName); err == nil {
+			return cfg, nil
+		}
+	}
+	// Legacy shape ("rancher/<cluster>") with several servers attached: the
+	// name came from a pre-upgrade session. Try every source; the first
+	// holding this context name wins, and ambiguity is resolved by the sort
+	// order of ListContexts (the same name from two servers collapses there).
+	for _, source := range sources {
+		if cfg, err := source.RestConfig(ctx, ctxName); err == nil {
+			return cfg, nil
+		}
+	}
+	return nil, fmt.Errorf("rancher context %q is not available on any connected server", ctxName)
 }
 
 // DefaultContext returns the kubeconfig's current-context name. When the
@@ -240,7 +332,7 @@ func (m *Manager) DefaultContext() (string, error) {
 	m.refreshIfKubeconfigChanged()
 	raw, err := m.loadFileConfig()
 	if err != nil {
-		if m.Rancher() == nil {
+		if len(m.Ranchers()) == 0 {
 			return "", err
 		}
 		return "", nil

@@ -167,7 +167,7 @@ func (s *Server) buildPageData(ctx context.Context, ctxID, ns, resource string) 
 		BulkDeleteURL:     "/c/" + ctxID + "/bulk-delete",
 		CSRFToken:         s.csrfToken,
 		ConnError:         connErr,
-		RancherConfigured: s.mgr.Rancher() != nil,
+		RancherConfigured: len(s.mgr.Ranchers()) > 0,
 	}, nil
 }
 

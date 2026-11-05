@@ -86,10 +86,11 @@ func (m *Manager) Clients(ctxName string) (*Clients, error) {
 }
 
 // restConfigFor builds the REST configuration for a context that either
-// lives in the kubeconfig file or was imported from Rancher.
+// lives in the kubeconfig file or was imported from any connected Rancher
+// server.
 func (m *Manager) restConfigFor(ctxName string) (*rest.Config, error) {
 	if m.hasRancherContext(ctxName) {
-		return m.Rancher().RestConfig(context.Background(), ctxName)
+		return m.rancherContextFor(context.Background(), ctxName)
 	}
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: ctxName}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(m.loadingRules, overrides).ClientConfig()

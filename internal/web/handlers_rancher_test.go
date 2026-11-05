@@ -387,8 +387,9 @@ func TestRancherFlagsTakePrecedenceOverFile(t *testing.T) {
 		t.Fatalf("source kind = %q, want flags", kind)
 	}
 	// The file entry survives untouched.
-	if got := server.settingsStore.Rancher(); got == nil || got.Token != "web-token" {
-		t.Fatalf("persisted entry disturbed by flags: %+v", got)
+	persisted := server.settingsStore.Ranchers()
+	if len(persisted) != 1 || persisted[0].Token != "web-token" {
+		t.Fatalf("persisted entry disturbed by flags: %+v", persisted)
 	}
 }
 
@@ -405,7 +406,7 @@ func TestRancherRemoveClearsPersistedFile(t *testing.T) {
 	if rec := rancherRequest(t, server, http.MethodDelete, "/rancher", nil); rec.Code != http.StatusOK {
 		t.Fatalf("remove = %d: %s", rec.Code, rec.Body.String())
 	}
-	if got := server.settingsStore.Rancher(); got != nil {
+	if got := server.settingsStore.Ranchers(); len(got) != 0 {
 		t.Fatalf("persisted entry survived remove: %+v", got)
 	}
 	restored, err := New(server.mgr)

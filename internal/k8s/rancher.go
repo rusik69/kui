@@ -22,9 +22,10 @@ import (
 )
 
 // RancherContextPrefix namespaces contexts imported from a Rancher management
-// server. Every Rancher cluster becomes a context named
-// "rancher/<cluster name>", which can never collide with a file-based
-// kubeconfig context unless that file deliberately uses the same prefix.
+// server. With one connected server every cluster becomes a context named
+// "rancher/<cluster name>"; with several servers the server's ID is inserted
+// ("rancher/<server>/<cluster name>") so identical cluster names on different
+// servers never collide.
 const RancherContextPrefix = "rancher/"
 
 const (
@@ -39,12 +40,15 @@ const (
 	rancherErrorSnippetLimit   = 200
 )
 
-// RancherSource imports cluster kubeconfigs from a Rancher management server.
-// It lists the clusters the API token can access and asks Rancher to generate
-// a kubeconfig for each one; every imported cluster surfaces as a context
-// named "rancher/<cluster name>" that behaves like any kubeconfig context.
-// Credentials stay in memory — nothing is written to the kubeconfig file.
+// RancherSource imports cluster kubeconfigs from one Rancher management
+// server. It lists the clusters the API token can access and asks Rancher to
+// generate a kubeconfig for each one; every imported cluster surfaces as a
+// context that behaves like any kubeconfig context. Credentials stay in
+// memory — nothing is written to the kubeconfig file. A stable ID (the
+// server's hostname) lets the Manager namespace context names when several
+// servers are connected.
 type RancherSource struct {
+	id    string // stable identity: the URL's hostname (lowercased)
 	base  string // normalized server URL without a trailing slash
 	token string
 	http  *http.Client
@@ -107,6 +111,7 @@ func NewRancherSource(rawURL, token string, insecureSkipTLSVerify bool) (*Ranche
 		transport.TLSClientConfig.InsecureSkipVerify = true
 	}
 	return &RancherSource{
+		id:            RancherSourceID(rawURL),
 		base:          strings.TrimSuffix(u.String(), "/"),
 		token:         strings.TrimSpace(token),
 		http:          &http.Client{Timeout: rancherHTTPTimeout, Transport: transport},
@@ -114,6 +119,40 @@ func NewRancherSource(rawURL, token string, insecureSkipTLSVerify bool) (*Ranche
 		kubeconfigTTL: rancherKubeconfigTTL,
 		kubeconfigs:   map[string]rancherKubeconfigCache{},
 	}, nil
+}
+
+// RancherSourceID derives the stable identity for a Rancher server URL: the
+// lowercased hostname. Servers are keyed by host (not full URL) so
+// http/https or trailing-slash variants of the same server update one
+// connection instead of duplicating it.
+func RancherSourceID(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Host == "" {
+		return strings.ToLower(strings.TrimSpace(rawURL))
+	}
+	return strings.ToLower(u.Host)
+}
+
+// ID returns the source's stable identity (the server's hostname).
+func (s *RancherSource) ID() string {
+	return s.id
+}
+
+// OwnsContext reports whether ctxName can belong to this source: either the
+// single-server shape ("rancher/<cluster>") or this source's namespaced
+// shape ("rancher/<id>/<cluster>"). The final decision is RestConfig's —
+// this only guards the lookup order.
+func (s *RancherSource) OwnsContext(ctxName string) bool {
+	if !strings.HasPrefix(ctxName, RancherContextPrefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(ctxName, RancherContextPrefix)
+	if strings.HasPrefix(rest, s.id+"/") {
+		return true
+	}
+	// The plain shape can only be served by one source when several are
+	// attached; the Manager resolves the order, so every source claims it.
+	return !strings.Contains(rest, "/")
 }
 
 // Contexts lists every Rancher cluster the token can access as a context.
@@ -134,23 +173,37 @@ func (s *RancherSource) Contexts(ctx context.Context) ([]ContextInfo, error) {
 
 // RestConfig builds the REST configuration for a context previously returned
 // by Contexts. The merged Rancher view is treated as read-only by callers.
+// Namespaced names ("rancher/<id>/<cluster>", used when several servers are
+// connected) resolve to the same cluster as the plain name: this source only
+// serves its own clusters, so the server segment is stripped before lookup.
 func (s *RancherSource) RestConfig(ctx context.Context, ctxName string) (*rest.Config, error) {
-	if !strings.HasPrefix(ctxName, RancherContextPrefix) {
-		return nil, fmt.Errorf("context %q did not come from Rancher", ctxName)
+	if !s.OwnsContext(ctxName) {
+		return nil, fmt.Errorf("context %q did not come from this Rancher server", ctxName)
 	}
 	cfg, err := s.mergedConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := cfg.Contexts[ctxName]; !ok {
+	internal := s.internalContextName(ctxName)
+	if _, ok := cfg.Contexts[internal]; !ok {
 		return nil, fmt.Errorf("rancher context %q is not available", ctxName)
 	}
-	clientCfg := clientcmd.NewNonInteractiveClientConfig(*cfg, ctxName, &clientcmd.ConfigOverrides{}, nil)
+	clientCfg := clientcmd.NewNonInteractiveClientConfig(*cfg, internal, &clientcmd.ConfigOverrides{}, nil)
 	restCfg, err := clientCfg.ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("build client config for rancher context %q: %w", ctxName, err)
 	}
 	return restCfg, nil
+}
+
+// internalContextName maps an externally visible context name to this
+// source's internal (plain "rancher/<cluster>") name.
+func (s *RancherSource) internalContextName(ctxName string) string {
+	rest := strings.TrimPrefix(ctxName, RancherContextPrefix)
+	if strings.HasPrefix(rest, s.id+"/") {
+		return RancherContextPrefix + strings.TrimPrefix(rest, s.id+"/")
+	}
+	return ctxName
 }
 
 // Fingerprint identifies the current Rancher context set. It changes whenever
@@ -175,7 +228,10 @@ func (s *RancherSource) Status(ctx context.Context) (map[string]any, error) {
 	}
 	s.mu.Unlock()
 	out := map[string]any{
-		"url":      s.base,
+		"url": s.base,
+		// clusters counts contexts already imported (0 until the first
+		// successful list+merge); available counts what the server offers
+		// right now. The UI prefers available when reachable.
 		"clusters": clusterCount,
 	}
 	if builtAt != (time.Time{}) {
